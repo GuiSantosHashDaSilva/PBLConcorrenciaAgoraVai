@@ -6,15 +6,18 @@ import (
 	"fmt"
 	"net"
 	"sync"
+
 	"github.com/GuiSantosHashDaSilva/PBLConcorrenciaAgoraVai/internals/protocolo"
 )
 
 type ServerState struct {
-	mu    sync.Mutex
-	rides map[string]*protocolo.RideRequest // Mapa de ID da carona para os dados
+	mu sync.Mutex
+	// O mapa agora espera corretamente o tipo do seu pacote protocolo
+	rides map[string]*protocolo.RideRequest
 }
 
 func main() {
+
 	state := &ServerState{
 		rides: make(map[string]*protocolo.RideRequest),
 	}
@@ -44,7 +47,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 
 	for scanner.Scan() {
 		var msg protocolo.Message
-		// O receptor valida e descarta mensagens malformadas
+		// O receptor valida e descarta mensagens malformadas (removida a duplicação)
 		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
 			conn.Write([]byte(`{"status":"error", "message":"invalid format"}\n`))
 			continue
@@ -52,11 +55,14 @@ func handleConnection(conn net.Conn, state *ServerState) {
 
 		switch msg.Type {
 		case "PUBLISH_RIDE":
+			// Usando a estrutura correta do seu pacote protocolo
 			var req protocolo.RideRequest
+
+			// Converte o payload JSON para a estrutura RideRequest
 			json.Unmarshal(msg.Payload, &req)
 
+			// Trava o Mutex para salvar a carona na memória de forma segura
 			state.mu.Lock()
-			// Lógica para salvar a carona gerenciando a concorrência na memória
 			rideID := fmt.Sprintf("%s-%s", req.DriverID, req.Date)
 			state.rides[rideID] = &req
 			state.mu.Unlock()

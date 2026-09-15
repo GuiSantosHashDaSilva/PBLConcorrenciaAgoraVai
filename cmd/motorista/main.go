@@ -16,7 +16,12 @@ type Message struct {
 }
 
 func main() {
-	conn, err := net.Dial("tcp", "localhost:8080")
+	enderecoServidor := os.Getenv("SERVER_ADDR")
+	if enderecoServidor == "" {
+		enderecoServidor = "localhost:8811" // Fallback para rodar fora do Docker
+	}
+
+	conn, err := net.Dial("tcp", enderecoServidor)
 	if err != nil {
 		fmt.Println("Erro ao conectar ao servidor:", err)
 		return

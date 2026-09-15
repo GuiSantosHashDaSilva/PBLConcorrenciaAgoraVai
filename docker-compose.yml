@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  server:
+    build: .
+    container_name: vaijunto_server
+    ports:
+      - "8811:8811"
+    # O servidor roda o CMD padrão do Dockerfile ("./vaijunto_server")
+
+  motorista:
+    build: .
+    container_name: vaijunto_motorista
+    command: ["./vaijunto_motorista"]
+    stdin_open: true # Mantém o canal de entrada aberto (necessário para o Scanner)
+    tty: true        # Simula um terminal
+    environment:
+      - SERVER_ADDR=server:8811 # O Docker resolve a palavra "server" para o IP do contêiner do servidor
+    depends_on:
+      - server
+
+  passageiro:
+    build: .
+    container_name: vaijunto_passageiro
+    command: ["./vaijunto_passageiro"]
+    stdin_open: true
+    tty: true
+    environment:
+      - SERVER_ADDR=server:8811
+    depends_on:
+      - server

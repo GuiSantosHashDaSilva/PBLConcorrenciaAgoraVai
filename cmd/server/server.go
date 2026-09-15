@@ -23,13 +23,13 @@ func main() {
 	}
 
 	// Interface de socket nativa do TCP/IP
-	listener, err := net.Listen("tcp", ":8080")
+	listener, err := net.Listen("tcp", ":8811")
 	if err != nil {
 		fmt.Println("Erro ao iniciar servidor:", err)
 		return
 	}
 	defer listener.Close()
-	fmt.Println("Servidor central VAIJUNTO aguardando conexões na porta 8080...")
+	fmt.Println("Servidor central VAIJUNTO aguardando conexões na porta 8811...")
 
 	for {
 		conn, err := listener.Accept()
@@ -374,10 +374,64 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			conn.Write(append(respostaBytes, '\n'))
 			fmt.Printf("<- Enviando reservas para o passageiro '%s'\n", req.PassengerID)
 
+		case "CANCEL_RESERVATION":
+			var req struct {
+				PassengerID string `json:"passenger_id"`
+				RideID      string `json:"ride_id"`
+				Origin      string `json:"origin"`
+				Destination string `json:"destination"`
+			}
+			if err := json.Unmarshal(msg.Payload, &req); err != nil {
+				conn.Write([]byte(`{"status":"error", "message":"Payload inválido"}` + "\n"))
+				continue
+			}
+
+			state.mu.Lock()
+			ride, existe := state.rides[req.RideID]
+			sucesso := false
+
+			if existe {
+				// Procura o trecho correto
+				for i, seg := range ride.Segments {
+					if seg.Origin == req.Origin && seg.Destination == req.Destination {
+						// Procura o passageiro na lista deste trecho
+						for j, passID := range seg.Passengers {
+							if passID == req.PassengerID {
+								// 1. Remove o passageiro da lista (fatiando o slice)
+								ride.Segments[i].Passengers = append(seg.Passengers[:j], seg.Passengers[j+1:]...)
+
+								// 2. Devolve a vaga para o carro
+								ride.Segments[i].AvailableSeats++
+
+								sucesso = true
+								break
+							}
+						}
+						break
+					}
+				}
+			}
+			state.mu.Unlock()
+
+			if sucesso {
+				fmt.Printf("<- Reserva cancelada! Vaga devolvida. (Passageiro: %s | Trecho: %s -> %s)\n", req.PassengerID, req.Origin, req.Destination)
+				conn.Write([]byte(`{"status":"success", "message":"Reserva cancelada com sucesso! Vaga devolvida."}` + "\n"))
+			} else {
+				fmt.Printf("<- Falha ao cancelar: Reserva de '%s' não encontrada.\n", req.PassengerID)
+				conn.Write([]byte(`{"status":"error", "message":"Reserva não encontrada neste trecho."}` + "\n"))
+			}
+
 		default:
 			// SE O SERVIDOR NÃO RECONHECER O TIPO, ELE AVISA (EVITANDO O DEADLOCK)
 			fmt.Printf("<- TIPO DESCONHECIDO: '%s'\n", msg.Type)
 			conn.Write([]byte(`{"status":"error", "message":"Unknown type"}` + "\n"))
 		}
 	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Printf("Erro ao ler da conexão %s: %v\n", conn.RemoteAddr(), err)
+	} else {
+		fmt.Println("Cliente desconectado limparmente:", conn.RemoteAddr())
+	}
+
 }

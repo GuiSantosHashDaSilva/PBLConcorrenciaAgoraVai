@@ -16,7 +16,12 @@ type Message struct {
 }
 
 func main() {
-	conn, err := net.Dial("tcp", "localhost:8080")
+	enderecoServidor := os.Getenv("SERVER_ADDR")
+	if enderecoServidor == "" {
+		enderecoServidor = "localhost:8811" // Fallback para rodar fora do Docker
+	}
+
+	conn, err := net.Dial("tcp", enderecoServidor)
 	if err != nil {
 		fmt.Println("Erro ao conectar ao servidor:", err)
 		return
@@ -36,6 +41,7 @@ func main() {
 			fmt.Printf("Status: Autenticado como '%s'\n", passengerID)
 			fmt.Println("2. Buscar e Reservar Viagens")
 			fmt.Println("3. Consultar Minhas Reservas")
+			fmt.Println("4. Cancelar uma Reserva")
 		}
 		fmt.Println("0. Sair")
 		fmt.Print("Escolha uma opção: ")
@@ -50,12 +56,19 @@ func main() {
 
 		if passengerID == "" && opcao == "1" {
 			passengerID = autenticar(conn, scannerTeclado, leitorRede)
-		} else if passengerID != "" && opcao == "2" {
-			buscarEReservar(conn, scannerTeclado, leitorRede, passengerID)
-		} else if passengerID != "" && opcao == "3" { // <- NOVA CONDIÇÃO AQUI
-			consultarReservas(conn, leitorRede, passengerID)
+		} else if passengerID != "" {
+			switch opcao {
+			case "2":
+				buscarEReservar(conn, scannerTeclado, leitorRede, passengerID)
+			case "3":
+				consultarReservas(conn, leitorRede, passengerID)
+			case "4": // <- CHAMA A NOVA FUNÇÃO
+				cancelarReserva(conn, scannerTeclado, leitorRede, passengerID)
+			default:
+				fmt.Println("Opção inválida.")
+			}
 		} else {
-			fmt.Println("Opção inválida ou você precisa se autenticar primeiro.")
+			fmt.Println("Você precisa se autenticar primeiro.")
 		}
 	}
 }
@@ -200,6 +213,33 @@ func consultarReservas(conn net.Conn, leitor *bufio.Reader, passengerID string) 
 		fmt.Printf("  Trecho: %s -> %s\n", res.Origin, res.Destination)
 		fmt.Printf("  Valor: R$ %.2f\n", res.Price)
 	}
+}
+
+func cancelarReserva(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader, passengerID string) {
+	fmt.Print("\n--- Cancelar Reserva ---\n")
+	fmt.Print("Digite o ID da Carona (ex: 12-2026-10-15): ")
+	scanner.Scan()
+	rideID := strings.TrimSpace(scanner.Text())
+
+	fmt.Print("Origem do trecho que deseja cancelar: ")
+	scanner.Scan()
+	origem := strings.TrimSpace(scanner.Text())
+
+	fmt.Print("Destino do trecho que deseja cancelar: ")
+	scanner.Scan()
+	destino := strings.TrimSpace(scanner.Text())
+
+	req := map[string]string{
+		"passenger_id": passengerID,
+		"ride_id":      rideID,
+		"origin":       origem,
+		"destination":  destino,
+	}
+
+	enviarRequisicao(conn, "CANCEL_RESERVATION", req)
+
+	resposta, _ := leitor.ReadString('\n')
+	fmt.Println("\nResposta do servidor:", strings.TrimSpace(resposta))
 }
 
 // 3. FUNÇÃO DE REDE

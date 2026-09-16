@@ -96,7 +96,7 @@ func autenticar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader) str
 }
 
 func publicarCarona(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader, driverID string) {
-	fmt.Print("\n--- Publicar Carona ---\nData da viagem (ex: 2026-10-15): ")
+	fmt.Print("\n--- Publicar Carona ---\nData da viagem (ex: 15-10-2026): ")
 	scanner.Scan()
 	data := scanner.Text()
 

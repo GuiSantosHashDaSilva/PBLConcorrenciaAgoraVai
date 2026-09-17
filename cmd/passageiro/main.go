@@ -95,9 +95,15 @@ func autenticar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader) str
 	return ""
 }
 
-// 2. FUNÇÃO DE BUSCA E RESERVA (Agora recebe o passengerID)
+// 2. FUNÇÃO DE BUSCA E RESERVA
 func buscarEReservar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader, passengerID string) {
-	fmt.Print("\n--- Buscar Viagens ---\nOrigem: ")
+	fmt.Print("\n--- Buscar Viagens ---\n")
+
+	fmt.Print("Data da viagem (ex: 15-10-2026): ")
+	scanner.Scan()
+	dataViagem := strings.TrimSpace(scanner.Text())
+
+	fmt.Print("Origem: ")
 	scanner.Scan()
 	origem := strings.TrimSpace(scanner.Text())
 
@@ -106,7 +112,11 @@ func buscarEReservar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader
 	destino := strings.TrimSpace(scanner.Text())
 
 	// Requisição de busca
-	reqBusca := map[string]string{"origin": origem, "destination": destino}
+	reqBusca := map[string]string{
+		"date":        dataViagem,
+		"origin":      origem,
+		"destination": destino,
+	}
 	enviarRequisicao(conn, "SEARCH_ROUTE", reqBusca)
 
 	resposta, _ := leitor.ReadString('\n')
@@ -126,7 +136,7 @@ func buscarEReservar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader
 	json.Unmarshal([]byte(resposta), &respData)
 
 	if len(respData.Routes) == 0 {
-		fmt.Println("\nNenhuma rota encontrada para esta busca.")
+		fmt.Println("\nNenhuma viagem encontrada.")
 		return
 	}
 
@@ -164,7 +174,7 @@ func buscarEReservar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader
 			})
 		}
 
-		// Requisição de reserva (Agora enviamos também o ID do passageiro logado)
+		// Requisição de reserva
 		reqReserva := map[string]any{
 			"passenger_id": passengerID,
 			"itinerary":    itinerario,

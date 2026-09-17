@@ -18,7 +18,7 @@ type Message struct {
 func main() {
 	enderecoServidor := os.Getenv("SERVER_ADDR")
 	if enderecoServidor == "" {
-		enderecoServidor = "localhost:8811" // Fallback para rodar fora do Docker
+		enderecoServidor = "localhost:8811"
 	}
 
 	conn, err := net.Dial("tcp", enderecoServidor)
@@ -28,7 +28,7 @@ func main() {
 	}
 	defer conn.Close()
 
-	// 1. CRIAMOS O LEITOR E O SCANNER APENAS UMA VEZ
+	
 	leitorRede := bufio.NewReader(conn)
 	scannerTeclado := bufio.NewScanner(os.Stdin)
 	var driverID string
@@ -55,7 +55,7 @@ func main() {
 		}
 
 		if driverID == "" && opcao == "1" {
-			// Passamos o leitorRede para a função
+			// Passa o leitorRede para a função
 			driverID = autenticar(conn, scannerTeclado, leitorRede)
 		} else if driverID != "" {
 			switch opcao {
@@ -72,7 +72,7 @@ func main() {
 	}
 }
 
-// 2. ATUALIZAMOS AS FUNÇÕES PARA RECEBER O LEITOR
+// atualiza as funções pra receber o leitor
 func autenticar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader) string {
 	fmt.Print("\n--- Login ---\nDigite seu Login (ID): ")
 	scanner.Scan()
@@ -85,7 +85,7 @@ func autenticar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader) str
 	req := map[string]string{"login": login, "senha": senha}
 	enviarRequisicao(conn, "LOGIN", req)
 
-	// Usamos o leitor único aqui
+	// Usa o leitor único aqui
 	resposta, _ := leitor.ReadString('\n')
 	fmt.Println("Resposta do servidor:", strings.TrimSpace(resposta))
 
@@ -163,14 +163,13 @@ func consultarCaronas(conn net.Conn, leitor *bufio.Reader, driverID string) {
 		return
 	}
 
-	// Exibição amigável
 	for i, ride := range respData.Rides {
 		fmt.Printf("\n[Viagem %d] - Data: %s\n", i+1, ride.Date)
 		for j, seg := range ride.Segments {
 			fmt.Printf("  Trecho %d: %s -> %s\n", j+1, seg.Origin, seg.Destination)
 			fmt.Printf("  Assentos Restantes: %d | Preço: R$ %.2f\n", seg.AvailableSeats, seg.Price)
 
-			// Mostra os passageiros se houver algum
+			// Mostra os passageiros se tiver algum
 			if len(seg.Passengers) > 0 {
 				fmt.Printf("  Passageiros Confirmados: %s\n", strings.Join(seg.Passengers, ", "))
 			} else {

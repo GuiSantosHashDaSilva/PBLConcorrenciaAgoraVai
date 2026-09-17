@@ -19,11 +19,11 @@ type Message struct {
 func main() {
 	fmt.Println("=== INICIANDO TESTE DE CONCORRÊNCIA (MUTEX) ===")
 
-	// 1. O Script "Motorista" publica uma carona com apenas 5 VAGAS
+	// 1. O Script Motorista publica uma carona com 5 vagas
 	prepararCarona()
 	time.Sleep(1 * time.Second) // Dá um tempo para o servidor processar
 
-	// 2. Disparamos 50 "Passageiros" tentando reservar ao mesmo tempo
+	// 50 passageiros tentam reservar ao mesmo tempo
 	var wg sync.WaitGroup
 	var sucessos int32
 	var falhas int32
@@ -34,7 +34,7 @@ func main() {
 	for i := 0; i < totalTentativas; i++ {
 		wg.Add(1)
 		passengerID := fmt.Sprintf("passageiro_teste_%d", i)
-		
+
 		go func(pID string) {
 			defer wg.Done()
 			sucesso := tentarReservar(pID)
@@ -48,15 +48,15 @@ func main() {
 
 	wg.Wait() // Espera todas as 50 goroutines terminarem
 
-	// 3. Resultado do Teste
+	// Resultado
 	fmt.Println("\n=== RESULTADO DO TESTE ===")
 	fmt.Printf("Sucessos (Vagas preenchidas): %d\n", sucessos)
 	fmt.Printf("Falhas (Vagas esgotadas): %d\n", falhas)
 
 	if sucessos == 5 && falhas == 45 {
-		fmt.Println("✅ TESTE PASSOU: O Mutex funcionou perfeitamente! Nenhuma vaga foi vendida a mais e não houve Race Condition.")
+		fmt.Println("passou: O Mutex funcionou, nenhuma vaga foi vendida a mais e não houve corrida")
 	} else {
-		fmt.Println("❌ TESTE FALHOU: Houve vazamento de vagas ou bloqueio inesperado.")
+		fmt.Println("falhou: Houve vazamento de vagas ou bloqueio inesperado.")
 	}
 }
 
@@ -95,7 +95,7 @@ func tentarReservar(passengerID string) bool {
 	req := map[string]any{
 		"passenger_id": passengerID,
 		"itinerary": []map[string]string{
-			{"ride_id": "motorista_teste-2026-12-31", "origin": "A", "destination": "B"},
+			{"ride_id": "1", "origin": "A", "destination": "B"},
 		},
 	}
 
@@ -103,7 +103,7 @@ func tentarReservar(passengerID string) bool {
 	leitor := bufio.NewReader(conn)
 	resposta, _ := leitor.ReadString('\n')
 
-	// Se a resposta contiver "success", significa que conseguiu a vaga
+	// Se a resposta tiver "success", significa que conseguiu a vaga
 	return strings.Contains(resposta, "success")
 }
 

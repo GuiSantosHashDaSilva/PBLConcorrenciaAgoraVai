@@ -1,15 +1,15 @@
 # 🚗 Vai Junto - Sistema de Caronas Distribuído
 
-Este projeto é um sistema distribuído de caronas (estilo "BlaBlaCar") desenvolvido em **Go (Golang)** utilizando comunicação via **Sockets TCP** e troca de mensagens no formato **JSON**. 
+Este projeto é um sistema distribuído de caronas desenvolvido em **Go (Golang)** utilizando comunicação via **Sockets TCP** e troca de mensagens no formato **JSON**. 
 
-Desenvolvido como trabalho acadêmico (Data de Entrega: 17/09/2026), o sistema implementa uma arquitetura Cliente-Servidor robusta e lida com problemas clássicos de sistemas distribuídos, como concorrência e gerenciamento de estado.
+Desenvolvido como trabalho acadêmico, o sistema implementa uma arquitetura Cliente-Servidor e lida com problemas de sistemas distribuídos, como concorrência e gerenciamento de estado.
 
 ---
 
 ## 🛠️ Tecnologias Utilizadas
 
 - **Linguagem:** Go 1.21+
-- **Comunicação:** TCP/IP nativo (`net` package)
+- **Comunicação:** TCP/IP nativo
 - **Protocolo:** JSON customizado sobre TCP
 - **Infraestrutura:** Docker e Docker Compose
 
@@ -17,9 +17,9 @@ Desenvolvido como trabalho acadêmico (Data de Entrega: 17/09/2026), o sistema i
 
 ## ⚙️ Funcionalidades e Arquitetura
 
-- **Roteamento em Grafo (Busca em Largura - BFS):** O servidor conecta trechos de diferentes motoristas para formar rotas complexas. Se o João vai de A para B, e a Maria vai de B para C, o sistema sugere a rota completa de A para C.
-- **Reserva Atômica (Tudo ou Nada):** Garante que um passageiro só consiga reservar uma rota composta se **todas** as vagas de todos os trechos estiverem disponíveis simultaneamente.
-- **Controle de Concorrência (Mutex):** Utiliza `sync.Mutex` no servidor para impedir condições de corrida (Race Conditions), garantindo que múltiplas reservas no mesmo milissegundo não resultem em vagas negativas.
+- **Roteamento em Grafo (Busca em Largura - BFS):** O servidor conecta trechos de diferentes motoristas para formar rotas. Se o João vai de A para B, e a Maria vai de B para C, o sistema sugere a rota completa de A para C.
+- **Reserva Atômica:** Garante que um passageiro só consiga reservar uma rota composta se todas as vagas de todos os trechos estiverem disponíveis simultaneamente.
+- **Controle de Concorrência:** Utiliza `sync.Mutex` no servidor para impedir condições de corrida, garantindo que múltiplas reservas no mesmo tempo não resultem em vagas negativas.
 - **Painel do Motorista:** Publicação e cancelamento de viagens, além da visualização de histórico com a identificação dos passageiros confirmados.
 - **Painel do Passageiro:** Busca inteligente com soma de preços, reserva atômica direta e cancelamento de trechos (devolvendo a vaga).
 
@@ -36,7 +36,7 @@ Toda mensagem trafegada via TCP utiliza um padrão universal contendo o `type` d
   "type": "PUBLISH_RIDE",
   "payload": {
     "driver_id": "motorista_01",
-    "date": "2026-10-15",
+    "date": "15-10-2026",
     "segments": [
       {
         "origin": "Salvador",
@@ -62,7 +62,7 @@ Toda mensagem trafegada via TCP utiliza um padrão universal contendo o `type` d
     "passenger_id": "passageiro_01",
     "itinerary": [
       {
-        "ride_id": "motorista_01-2026-10-15",
+        "ride_id": "motorista_01-15-10-2025",
         "origin": "Salvador",
         "destination": "Feira de Santana"
       }
@@ -77,11 +77,11 @@ Toda mensagem trafegada via TCP utiliza um padrão universal contendo o `type` d
 
 ---
 
-## 🚀 Como Executar o Sistema no Terminal
+## Como Executar o Sistema no Terminal
 
-Você pode executar o sistema utilizando Docker (recomendado para evitar conflitos) ou localmente via Go.
+Você pode executar o sistema utilizando Docker ou localmente via Go.
 
-### Opção A: Execução via Docker Compose (Recomendado)
+### Opção A: Execução via Docker Compose
 *Pré-requisito: Docker e Docker Compose instalados.*
 
 Abra **três terminais diferentes** na raiz do projeto e siga a ordem:
@@ -105,18 +105,18 @@ Abra **três terminais diferentes** na raiz do projeto e siga a ordem:
 
 *(Para desligar tudo ao final do uso, execute: `docker-compose down`)*
 
-### Opção B: Execução Local (Sem Docker)
+### Opção B: Execução Local Sem Docker
 *Pré-requisito: Go 1.21+ instalado na máquina.*
 
 Abra **três terminais diferentes** na raiz do projeto:
 
-1. **Terminal 1:** `go run server.go` (Aguarde a mensagem indicando a porta 8811).
+1. **Terminal 1:** `go run server.go`
 2. **Terminal 2:** `go run cliente_motorista.go`
 3. **Terminal 3:** `go run cliente_passageiro.go`
 
 ---
 
-## Como Usar o Sistema (Fluxo Prático)
+## Como Usar o Sistema
 
 Para testar todas as funcionalidades do sistema, siga este roteiro de uso com os painéis abertos:
 
@@ -131,10 +131,10 @@ Para testar todas as funcionalidades do sistema, siga este roteiro de uso com os
 2. Escolha a opção **2 (Buscar e Reservar Viagens)**.
 3. Digite a Origem (`Salvador`) e Destino (`Feira`).
 4. O sistema (usando BFS) retornará as opções disponíveis com o preço total calculado.
-5. Digite o **número da opção** desejada para efetuar a reserva atômica. O servidor confirmará a reserva e descontará a vaga.
+5. Digite o **número da opção** desejada para efetuar a reserva. O servidor confirmará a reserva e descontará a vaga.
 
 ### Passo 3: Consultando o Histórico
-- **No Motorista:** Escolha a opção **3 (Consultar Minhas Caronas)**. Você verá a carona publicada, as vagas restantes (agora 2) e o ID do passageiro `carlos` confirmado.
+- **No Motorista:** Escolha a opção **3 (Consultar Minhas Caronas)**. Você verá a carona publicada, as vagas restantes e o ID do passageiro `carlos` confirmado.
 - **No Passageiro:** Escolha a opção **3 (Consultar Minhas Reservas)** para visualizar os detalhes do trecho adquirido.
 
 ### Passo 4: Cancelamento (Opcional)
@@ -153,4 +153,4 @@ Para executar e validar:
    ```bash
    go run cmd/teste_concorrencia.go
    ```
-**Resultado Esperado:** O sistema garantirá que apenas 5 requisições tenham sucesso e 45 falhem, exibindo a mensagem: `✅ TESTE PASSOU: Mutex bloqueou Race Condition!`. Nenhuma vaga extra será criada ou vendida.
+**Resultado Esperado:** O sistema garantirá que apenas 5 requisições tenham sucesso e 45 falhem, exibindo a mensagem: `passou: O Mutex funcionou, nenhuma vaga foi vendida a mais e não houve corrida`. Nenhuma vaga extra será criada ou vendida.

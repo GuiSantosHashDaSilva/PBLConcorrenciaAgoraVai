@@ -11,15 +11,16 @@ import (
 )
 
 type ServerState struct {
-	mu sync.Mutex
-	// O mapa agora espera corretamente o tipo do seu pacote protocolo
-	rides map[string]*protocolo.RideRequest
+	mu         sync.Mutex
+	rides      map[string]*protocolo.RideRequest
+	nextRideID int
 }
 
 func main() {
 
 	state := &ServerState{
-		rides: make(map[string]*protocolo.RideRequest),
+		rides:      make(map[string]*protocolo.RideRequest),
+		nextRideID: 1,
 	}
 
 	// Interface de socket nativa do TCP/IP
@@ -49,7 +50,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 
 	for scanner.Scan() {
 		textoRecebido := scanner.Text()
-		fmt.Println("-> Recebido do cliente:", textoRecebido) // LOG CRUCIAL: Mostra o JSON exato
+		fmt.Println("-> Recebido do cliente:", textoRecebido) 
 
 		var msg protocolo.Message
 		if err := json.Unmarshal([]byte(textoRecebido), &msg); err != nil {
@@ -58,7 +59,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			continue
 		}
 
-		// Convertendo para string para garantir que o switch funcione independentemente do tipo Servico
+		
 		switch string(msg.Type) {
 		case "LOGIN":
 			var req struct {
@@ -72,16 +73,16 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				continue
 			}
 
-			// Lógica de autenticação (simplificada para o protótipo)
-			// Em um sistema real, aqui você buscaria a 'Pessoa' em um mapa ou banco de dados
+			
+			
 			if req.Login != "" && req.Senha != "" {
 				fmt.Printf("<- Motorista '%s' autenticado com sucesso!\n", req.Login)
-				// Concatenação correta do \n fora das crases
 				conn.Write([]byte(`{"status":"success", "message":"Login Efetuado com sucesso"}` + "\n"))
 			} else {
 				fmt.Println("<- Falha no login: credenciais vazias.")
 				conn.Write([]byte(`{"status":"error", "message":"Login ou Senha incorreta"}` + "\n"))
 			}
+		
 		case "PUBLISH_RIDE":
 			var req protocolo.RideRequest
 
@@ -92,12 +93,14 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			}
 
 			state.mu.Lock()
-			rideID := fmt.Sprintf("%s-%s", req.DriverID, req.Date)
+			rideID := fmt.Sprintf("%d", state.nextRideID)
+			state.nextRideID++
 			state.rides[rideID] = &req
 			state.mu.Unlock()
 
 			fmt.Println("<- Carona salva! Enviando sucesso.")
 			conn.Write([]byte(`{"status":"success", "message":"Ride published"}` + "\n"))
+		
 		case "CONSULT_RIDES":
 			var req struct {
 				DriverID string `json:"driver_id"`
@@ -107,7 +110,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				continue
 			}
 
-			// Trava o estado para leitura segura
+			// Trava o estado para leitura
 			state.mu.Lock()
 			var minhasCaronas []*protocolo.RideRequest
 			for _, ride := range state.rides {
@@ -115,9 +118,9 @@ func handleConnection(conn net.Conn, state *ServerState) {
 					minhasCaronas = append(minhasCaronas, ride)
 				}
 			}
-			state.mu.Unlock() // Libera imediatamente após copiar os dados
+			state.mu.Unlock() // Libera depois de copiar os dados
 
-			// Transforma a lista de caronas em JSON e envia de volta
+			// Transforma a lista de caronas em json e envia de volta
 			respostaBytes, _ := json.Marshal(map[string]any{
 				"status": "success",
 				"rides":  minhasCaronas,
@@ -135,7 +138,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				continue
 			}
 
-			// Trava o estado para deleção segura
+			// Trava o estado para apagar
 			state.mu.Lock()
 			ride, existe := state.rides[req.RideID]
 
@@ -155,6 +158,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 
 		case "SEARCH_ROUTE":
 			var req struct {
+				Date        string `json:"date"`
 				Origin      string `json:"origin"`
 				Destination string `json:"destination"`
 			}
@@ -163,7 +167,6 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				continue
 			}
 
-			// Estrutura auxiliar para o grafo
 			type TrechoInfo struct {
 				RideID         string  `json:"ride_id"`
 				DriverID       string  `json:"driver_id"`
@@ -174,32 +177,34 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				Price          float64 `json:"price"`
 			}
 
-			// 1. BLOQUEIO RÁPIDO: Monta a Lista de Adjacência e libera o acesso
 			state.mu.Lock()
 			grafo := make(map[string][]TrechoInfo)
 			for rideID, ride := range state.rides {
-				for _, seg := range ride.Segments {
-					if seg.AvailableSeats > 0 { // Só cria aresta se houver vaga
-						grafo[seg.Origin] = append(grafo[seg.Origin], TrechoInfo{
-							RideID:         rideID,
-							DriverID:       ride.DriverID,
-							Date:           ride.Date,
-							Origin:         seg.Origin,
-							Destination:    seg.Destination,
-							AvailableSeats: seg.AvailableSeats,
-							Price:          seg.Price,
-						})
+
+				if ride.Date == req.Date {
+					for _, seg := range ride.Segments {
+						if seg.AvailableSeats > 0 {
+							grafo[seg.Origin] = append(grafo[seg.Origin], TrechoInfo{
+								RideID:         rideID,
+								DriverID:       ride.DriverID,
+								Date:           ride.Date,
+								Origin:         seg.Origin,
+								Destination:    seg.Destination,
+								AvailableSeats: seg.AvailableSeats,
+								Price:          seg.Price,
+							})
+						}
 					}
 				}
 			}
-			state.mu.Unlock() // Mutex liberado! O BFS roda sem travar o servidor.
+			state.mu.Unlock()
 
 			// 2. ESTRUTURAS DO ALGORITMO BFS
 			var rotasEncontradas [][]TrechoInfo // Armazena caminhos completos
 
 			type Path struct {
 				Trechos     []TrechoInfo
-				Visitados   map[string]bool // Evita ciclos infinitos (ex: A -> B -> A)
+				Visitados   map[string]bool
 				CurrentNode string
 			}
 			var fila []Path
@@ -213,13 +218,13 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				})
 			}
 
-			// 3. EXECUÇÃO DO BFS
+			// execução bfs
 			for len(fila) > 0 {
-				// Desenfileira o primeiro caminho (Pop)
+				// Desenfileira o primeiro caminho
 				caminhoAtual := fila[0]
 				fila = fila[1:]
 
-				// Chegamos ao destino desejado? Salva a rota completa!
+				// Chegou no destino desejado? salva o caminho inteiro
 				if caminhoAtual.CurrentNode == req.Destination {
 					rotasEncontradas = append(rotasEncontradas, caminhoAtual.Trechos)
 					continue
@@ -250,16 +255,15 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				}
 			}
 
-			// 4. RETORNO AO PASSAGEIRO
+			// retorno
 			respostaBytes, _ := json.Marshal(map[string]any{
 				"status": "success",
-				"routes": rotasEncontradas, // Devolve uma lista de roteiros, onde cada roteiro é uma lista de trechos
+				"routes": rotasEncontradas, 
 			})
 			conn.Write(append(respostaBytes, '\n'))
-			fmt.Printf("<- BFS Concluído: %d rota(s) encontrada(s) de %s para %s\n", len(rotasEncontradas), req.Origin, req.Destination)
+			fmt.Printf("<- BFS Concluído: %d rota(s) encontrada(s) de %s para %s no dia %s\n", len(rotasEncontradas), req.Origin, req.Destination, req.Date)
 
 		case "BOOK_ROUTE":
-			// 1. Atualizamos a estrutura para ler o PassengerID
 			var req struct {
 				PassengerID string `json:"passenger_id"`
 				Itinerary   []struct {
@@ -275,12 +279,12 @@ func handleConnection(conn net.Conn, state *ServerState) {
 
 			state.mu.Lock()
 
-			// 1. FASE DE VERIFICAÇÃO (Tudo ou nada)
+			// Verificação atomica
 			podeReservar := true
 			for _, trechoReq := range req.Itinerary {
 				ride, existe := state.rides[trechoReq.RideID]
 				if !existe {
-					podeReservar = false // Carona não existe
+					podeReservar = false 
 					break
 				}
 
@@ -301,7 +305,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				}
 			}
 
-			// 2. FASE DE EFETIVAÇÃO (Atômica)
+			// reservação atomica
 			if podeReservar {
 				for _, trechoReq := range req.Itinerary {
 					ride := state.rides[trechoReq.RideID]
@@ -309,7 +313,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 						if seg.Origin == trechoReq.Origin && seg.Destination == trechoReq.Destination {
 							// Desconta a vaga
 							ride.Segments[i].AvailableSeats--
-							// ADICIONA O PASSAGEIRO NA LISTA DESTE TRECHO ESPECÍFICO
+							// adiciona o passageiro no trecho
 							ride.Segments[i].Passengers = append(ride.Segments[i].Passengers, req.PassengerID)
 							break
 						}
@@ -333,10 +337,10 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				continue
 			}
 
-			// Trava o estado para buscar com segurança
+			// Trava o estado para buscar
 			state.mu.Lock()
 
-			// Estrutura para devolver os trechos exatos que o passageiro comprou
+			// Estrutura para devolver os trechos que o passageiro comprou
 			type Reserva struct {
 				RideID      string  `json:"ride_id"`
 				DriverID    string  `json:"driver_id"`
@@ -347,7 +351,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			}
 			var minhasReservas []Reserva
 
-			// Varre todas as caronas, todos os trechos e todos os passageiros
+
 			for rideID, ride := range state.rides {
 				for _, seg := range ride.Segments {
 					for _, passID := range seg.Passengers {
@@ -360,7 +364,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 								Destination: seg.Destination,
 								Price:       seg.Price,
 							})
-							break // Já achou neste trecho, vai pro próximo
+							break
 						}
 					}
 				}
@@ -391,16 +395,12 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			sucesso := false
 
 			if existe {
-				// Procura o trecho correto
 				for i, seg := range ride.Segments {
 					if seg.Origin == req.Origin && seg.Destination == req.Destination {
-						// Procura o passageiro na lista deste trecho
 						for j, passID := range seg.Passengers {
 							if passID == req.PassengerID {
-								// 1. Remove o passageiro da lista (fatiando o slice)
 								ride.Segments[i].Passengers = append(seg.Passengers[:j], seg.Passengers[j+1:]...)
 
-								// 2. Devolve a vaga para o carro
 								ride.Segments[i].AvailableSeats++
 
 								sucesso = true
@@ -422,7 +422,6 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			}
 
 		default:
-			// SE O SERVIDOR NÃO RECONHECER O TIPO, ELE AVISA (EVITANDO O DEADLOCK)
 			fmt.Printf("<- TIPO DESCONHECIDO: '%s'\n", msg.Type)
 			conn.Write([]byte(`{"status":"error", "message":"Unknown type"}` + "\n"))
 		}

@@ -95,12 +95,12 @@ Abra **três terminais diferentes** na raiz do projeto e siga a ordem:
 
 2. **Terminal 2 (Motorista):**
    ```bash
-   docker-compose run -e SERVER_ADD="ipdamaquinaserver:8811" motorista
+   docker-compose run motorista
    ```
 
 3. **Terminal 3 (Passageiro):**
    ```bash
-   docker-compose run -e SERVER_ADD="ipdamaquinaserver:8811" passageiro
+   docker-compose run passageiro
    ```
 
 *(Para desligar tudo ao final do uso, execute: `docker-compose down`)*

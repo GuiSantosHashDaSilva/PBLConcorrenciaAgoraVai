@@ -180,12 +180,11 @@ func consultarCaronas(conn net.Conn, leitor *bufio.Reader, driverID string) {
 }
 
 func cancelarCarona(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader, driverID string) {
-	fmt.Print("\n--- Cancelar Carona ---\nDigite a Data da viagem que deseja cancelar (ex: 2026-10-15): ")
+	fmt.Print("\n--- Cancelar Carona ---\nDigite o ID da viagem que deseja cancelar (ex: 1, 2): ")
 	scanner.Scan()
-	data := scanner.Text()
+	rideID := strings.TrimSpace(scanner.Text())
 
-	// O servidor usa driver_id + data para gerar o ID da carona
-	rideID := fmt.Sprintf("%s-%s", driverID, data)
+	// Agora enviamos o ID simples diretamente na requisição
 	req := map[string]string{"ride_id": rideID, "driver_id": driverID}
 
 	enviarRequisicao(conn, "CANCEL_RIDE", req)

@@ -227,7 +227,8 @@ func consultarReservas(conn net.Conn, leitor *bufio.Reader, passengerID string) 
 
 func cancelarReserva(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader, passengerID string) {
 	fmt.Print("\n--- Cancelar Reserva ---\n")
-	fmt.Print("Digite o ID da Carona (ex: 12-2026-10-15): ")
+	// Atualizado para pedir o ID numérico simples
+	fmt.Print("Digite o ID numérico da Carona (ex: 1, 2): ")
 	scanner.Scan()
 	rideID := strings.TrimSpace(scanner.Text())
 

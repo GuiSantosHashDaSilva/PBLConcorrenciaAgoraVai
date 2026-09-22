@@ -84,7 +84,7 @@ func prepararCarona() {
 	fmt.Println("Carona de teste publicada com sucesso (ID: motorista_teste-2026-12-31 | 5 Vagas).")
 }
 
-// Função executada por cada goroutine concorrente
+// Função q cada goroutine executa
 func tentarReservar(passengerID string) bool {
 	conn, err := net.Dial("tcp", "localhost:8811")
 	if err != nil {
@@ -103,7 +103,7 @@ func tentarReservar(passengerID string) bool {
 	leitor := bufio.NewReader(conn)
 	resposta, _ := leitor.ReadString('\n')
 
-	// Se a resposta tiver "success", significa que conseguiu a vaga
+	// Se a resposta for "success", deu certo
 	return strings.Contains(resposta, "success")
 }
 

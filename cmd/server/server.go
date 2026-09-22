@@ -37,7 +37,7 @@ func main() {
 		if err != nil {
 			continue
 		}
-		// Goroutine para cada cliente conectado, garantindo atendimento simultâneo
+		// Goroutine para cada cliente, permite atendimento simultâneo
 		go handleConnection(conn, state)
 	}
 }
@@ -138,11 +138,11 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				continue
 			}
 
-			// Trava o estado para apagar
+			// Trava o estado pra apagar
 			state.mu.Lock()
 			ride, existe := state.rides[req.RideID]
 
-			// Só cancela se a carona existir e pertencer a quem pediu
+			// Só cancela se a carona existir e for de quem pediu
 			if existe && ride.DriverID == req.DriverID {
 				delete(state.rides, req.RideID)
 				state.mu.Unlock()
@@ -199,8 +199,8 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			}
 			state.mu.Unlock()
 
-			// 2. ESTRUTURAS DO ALGORITMO BFS
-			var rotasEncontradas [][]TrechoInfo // Armazena caminhos completos
+			// Estrutura do BFS
+			var rotasEncontradas [][]TrechoInfo // Armazena os caminhos completos
 
 			type Path struct {
 				Trechos     []TrechoInfo
@@ -209,7 +209,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			}
 			var fila []Path
 
-			// Inicializa a fila com as arestas que partem da Origem
+			// Inicializa a fila com as arestas que saem da origem
 			for _, aresta := range grafo[req.Origin] {
 				fila = append(fila, Path{
 					Trechos:     []TrechoInfo{aresta},
@@ -245,7 +245,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 						copy(novosTrechos, caminhoAtual.Trechos)
 						novosTrechos = append(novosTrechos, vizinho)
 
-						// Enfileira o novo caminho estendido
+						// Coloca o novo caminho na fila
 						fila = append(fila, Path{
 							Trechos:     novosTrechos,
 							Visitados:   novoVisitados,
@@ -291,7 +291,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				trechoValido := false
 				for _, seg := range ride.Segments {
 					if seg.Origin == trechoReq.Origin && seg.Destination == trechoReq.Destination {
-						if seg.AvailableSeats < 1 { // Sem vagas neste trecho específico
+						if seg.AvailableSeats < 1 { // Sem vagas nesse trecho 
 							podeReservar = false
 						}
 						trechoValido = true

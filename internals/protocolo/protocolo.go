@@ -2,10 +2,10 @@ package protocolo
 
 import "encoding/json"
 
-// Message representa a estrutura intermediária para comunicação TCP
+// Message é a estrutura de comunicação TCP
 type Message struct {
 	Type    Servico         `json:"type"`    // Ex: "PUBLISH_RIDE", "SEARCH_ROUTE", "BOOK_ROUTE"
-	Payload json.RawMessage `json:"payload"` // Dados específicos da requisição ou resposta
+	Payload json.RawMessage `json:"payload"` // Dados da requisição ou resposta
 }
 
 type RideRequest struct {

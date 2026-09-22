@@ -28,7 +28,6 @@ func main() {
 	}
 	defer conn.Close()
 
-	
 	leitorRede := bufio.NewReader(conn)
 	scannerTeclado := bufio.NewScanner(os.Stdin)
 	var driverID string
@@ -55,7 +54,7 @@ func main() {
 		}
 
 		if driverID == "" && opcao == "1" {
-			// Passa o leitorRede para a função
+			// Passa o leitor da rede para a função
 			driverID = autenticar(conn, scannerTeclado, leitorRede)
 		} else if driverID != "" {
 			switch opcao {
@@ -72,7 +71,6 @@ func main() {
 	}
 }
 
-// atualiza as funções pra receber o leitor
 func autenticar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader) string {
 	fmt.Print("\n--- Login ---\nDigite seu Login (ID): ")
 	scanner.Scan()
@@ -141,7 +139,7 @@ func consultarCaronas(conn net.Conn, leitor *bufio.Reader, driverID string) {
 
 	resposta, _ := leitor.ReadString('\n')
 
-	// Estrutura para ler e formatar os dados que vêm do servidor
+	// Estrutura pra ler e formatar os dados que vem do servidor
 	var respData struct {
 		Status string `json:"status"`
 		Rides  []struct {
@@ -184,7 +182,6 @@ func cancelarCarona(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader,
 	scanner.Scan()
 	rideID := strings.TrimSpace(scanner.Text())
 
-	// Agora enviamos o ID simples diretamente na requisição
 	req := map[string]string{"ride_id": rideID, "driver_id": driverID}
 
 	enviarRequisicao(conn, "CANCEL_RIDE", req)

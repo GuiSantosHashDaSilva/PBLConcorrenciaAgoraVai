@@ -18,7 +18,7 @@ type Message struct {
 func main() {
 	enderecoServidor := os.Getenv("SERVER_ADDR")
 	if enderecoServidor == "" {
-		enderecoServidor = "localhost:8811" // Fallback para rodar fora do Docker
+		enderecoServidor = "localhost:8811" //pra rodar fora do Docker
 	}
 
 	conn, err := net.Dial("tcp", enderecoServidor)
@@ -62,7 +62,7 @@ func main() {
 				buscarEReservar(conn, scannerTeclado, leitorRede, passengerID)
 			case "3":
 				consultarReservas(conn, leitorRede, passengerID)
-			case "4": // <- CHAMA A NOVA FUNÇÃO
+			case "4":
 				cancelarReserva(conn, scannerTeclado, leitorRede, passengerID)
 			default:
 				fmt.Println("Opção inválida.")
@@ -73,7 +73,7 @@ func main() {
 	}
 }
 
-// 1. FUNÇÃO DE AUTENTICAÇÃO
+
 func autenticar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader) string {
 	fmt.Print("\n--- Login ---\nDigite seu Login (ID): ")
 	scanner.Scan()
@@ -95,7 +95,7 @@ func autenticar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader) str
 	return ""
 }
 
-// 2. FUNÇÃO DE BUSCA E RESERVA
+
 func buscarEReservar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader, passengerID string) {
 	fmt.Print("\n--- Buscar Viagens ---\n")
 
@@ -227,7 +227,7 @@ func consultarReservas(conn net.Conn, leitor *bufio.Reader, passengerID string) 
 
 func cancelarReserva(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader, passengerID string) {
 	fmt.Print("\n--- Cancelar Reserva ---\n")
-	// Atualizado para pedir o ID numérico simples
+	
 	fmt.Print("Digite o ID numérico da Carona (ex: 1, 2): ")
 	scanner.Scan()
 	rideID := strings.TrimSpace(scanner.Text())
@@ -253,7 +253,6 @@ func cancelarReserva(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader
 	fmt.Println("\nResposta do servidor:", strings.TrimSpace(resposta))
 }
 
-// 3. FUNÇÃO DE REDE
 func enviarRequisicao(conn net.Conn, tipo string, payload any) {
 	payloadBytes, _ := json.Marshal(payload)
 	msg := Message{Type: tipo, Payload: payloadBytes}

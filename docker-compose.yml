@@ -3,16 +3,16 @@ version: '3.8'
 services:
   server:
     build: .
-    container_name: vaijunto_server
+    container_name: vaijunto_serverGMGS
     ports:
       - "8811:8811"
     # O servidor roda o CMD padrão do Dockerfile ("./vaijunto_server")
 
   motorista:
     build: .
-    container_name: vaijunto_motorista
+    container_name: vaijunto_motoristaGMGS
     command: ["./vaijunto_motorista"]
-    stdin_open: true # Mantém o canal de entrada aberto (necessário para o Scanner)
+    stdin_open: true # Mantém o canal de entrada aberto pra o Scanner
     tty: true        # Simula um terminal
     environment:
       - SERVER_ADDR=server:8811 # O Docker resolve a palavra "server" para o IP do contêiner do servidor
@@ -21,7 +21,7 @@ services:
 
   passageiro:
     build: .
-    container_name: vaijunto_passageiro
+    container_name: vaijunto_passageiroGMGS
     command: ["./vaijunto_passageiro"]
     stdin_open: true
     tty: true

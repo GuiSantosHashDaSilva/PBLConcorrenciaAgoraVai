@@ -30,7 +30,7 @@ func main() {
 
 	leitorRede := bufio.NewReader(conn)
 	scannerTeclado := bufio.NewScanner(os.Stdin)
-	var passengerID string // Variável para controlar a sessão do passageiro
+	var passengerID string // variável para controlar a sessão do passageiro
 
 	for {
 		fmt.Println("\n=== VAIJUNTO: PAINEL DO PASSAGEIRO ===")
@@ -109,7 +109,7 @@ func buscarEReservar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader
 	scanner.Scan()
 	destino := strings.TrimSpace(scanner.Text())
 
-	// Requisição de busca
+	// requisição de busca
 	reqBusca := map[string]string{
 		"date":        dataViagem,
 		"origin":      origem,
@@ -119,7 +119,7 @@ func buscarEReservar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader
 
 	resposta, _ := leitor.ReadString('\n')
 
-	// Estrutura para ler o roteiro
+	// estrutura para ler o roteiro
 	var respData struct {
 		Status string `json:"status"`
 		Routes [][]struct {
@@ -174,7 +174,7 @@ func buscarEReservar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader
 			})
 		}
 
-		// Requisição de reserva
+		// requisição de reserva
 		reqReserva := map[string]any{
 			"passenger_id": passengerID,
 			"itinerary":    itinerario,
@@ -195,7 +195,7 @@ func consultarReservas(conn net.Conn, leitor *bufio.Reader, passengerID string) 
 
 	resposta, _ := leitor.ReadString('\n')
 
-	// Estrutura para ler o array de reservas devolvido pelo servidor
+	// estrutura para ler a lista de reservas devolvido pelo servidor
 	var respData struct {
 		Status       string `json:"status"`
 		Reservations []struct {

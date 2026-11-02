@@ -135,9 +135,9 @@ func handleConnection(conn net.Conn, state *ServerState) {
 					minhasCaronas = append(minhasCaronas, ride)
 				}
 			}
-			state.mu.Unlock() // Libera depois de copiar os dados
+			state.mu.Unlock() // libera depois de copiar os dados
 
-			// Transforma a lista de caronas em json e envia de volta
+			// transforma a lista de caronas em json e envia de volta
 			respostaBytes, _ := json.Marshal(map[string]any{
 				"status": "success",
 				"rides":  minhasCaronas,
@@ -239,7 +239,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 											Destination:    seg.Destination,
 											AvailableSeats: seg.AvailableSeats,
 											Price:          seg.Price,
-											ServerAddr:     peerAddr, // Marca que este trecho pertence a outro servidor
+											ServerAddr:     peerAddr, // Marca que este trecho é de outro servidor
 										})
 									}
 								}
@@ -249,7 +249,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				}
 			}
 
-			// Estrutura do BFS
+			// BFS
 			var rotasEncontradas [][]TrechoInfo // Armazena os caminhos completos
 
 			type Path struct {
@@ -328,7 +328,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				continue
 			}
 
-			// Vamos registrar quais peers já confirmaram a reserva para caso de Rollback
+			// registra quais peers já confirmaram a reserva caso dê Rollback
 			sucessoPeers := []struct{ Addr, RideID, Orig, Dest string }{}
 			sucessoLocais := []struct{ RideID, Orig, Dest string }{}
 
@@ -336,7 +336,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 
 			for _, trechoReq := range req.Itinerary {
 				if trechoReq.ServerAddr != "" {
-					// TRECHO REMOTO: Pede para o Peer reservar
+					// pede para o Peer reservar
 					payloadPeer, _ := json.Marshal(map[string]string{
 						"passenger_id": req.PassengerID,
 						"ride_id":      trechoReq.RideID,
@@ -351,16 +351,15 @@ func handleConnection(conn net.Conn, state *ServerState) {
 
 					if err != nil || resp.Type != "SUCCESS" {
 						podeReservar = false
-						break // Falhou num peer, aborta tudo
+						break // falhou num peer, para tudo
 					}
 
-					// Peer confirmou! Guarda para caso precise fazer rollback
+					// peer confirmou, guarda para caso precise fazer rollback
 					sucessoPeers = append(sucessoPeers, struct{ Addr, RideID, Orig, Dest string }{
 						Addr: trechoReq.ServerAddr, RideID: trechoReq.RideID, Orig: trechoReq.Origin, Dest: trechoReq.Destination,
 					})
 
 				} else {
-					// TRECHO LOCAL: Faz a lógica que você já tinha, mas atua imediatamente
 					state.mu.Lock()
 					ride, existe := state.rides[trechoReq.RideID]
 					trechoReservado := false
@@ -372,7 +371,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 									ride.Segments[i].AvailableSeats--
 									ride.Segments[i].Passengers = append(ride.Segments[i].Passengers, req.PassengerID)
 									trechoReservado = true
-									// Guarda para rollback local se der erro depois
+									// guarda para rollback local se der erro depois
 									sucessoLocais = append(sucessoLocais, struct{ RideID, Orig, Dest string }{
 										RideID: trechoReq.RideID, Orig: trechoReq.Origin, Dest: trechoReq.Destination,
 									})
@@ -386,7 +385,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 
 					if !trechoReservado {
 						podeReservar = false
-						break // Falhou localmente, aborta tudo
+						break // falhou localmente, cancela tudo
 					}
 				}
 			}
@@ -395,7 +394,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				fmt.Printf("<- Reserva distribuída concluída para o passageiro '%s'!\n", req.PassengerID)
 				conn.Write([]byte(`{"status":"success", "message":"Itinerário confirmado!"}` + "\n"))
 			} else {
-				// ROLLBACK! Desfaz tudo que tinha dado certo antes de falhar
+				// rollback
 				for _, p := range sucessoPeers {
 					payloadUndo, _ := json.Marshal(map[string]string{
 						"passenger_id": req.PassengerID, "ride_id": p.RideID, "origin": p.Orig, "destination": p.Dest,
@@ -408,8 +407,8 @@ func handleConnection(conn net.Conn, state *ServerState) {
 					ride := state.rides[l.RideID]
 					for i, seg := range ride.Segments {
 						if seg.Origin == l.Orig && seg.Destination == l.Dest {
-							ride.Segments[i].AvailableSeats++ // Devolve a vaga
-							// Remove o passageiro da lista (simplificação)
+							ride.Segments[i].AvailableSeats++ // devolve a vaga
+							// remove o passageiro da lista
 							ride.Segments[i].Passengers = ride.Segments[i].Passengers[:len(ride.Segments[i].Passengers)-1]
 							break
 						}
@@ -434,7 +433,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			// Trava o estado para buscar
 			state.mu.Lock()
 
-			// Estrutura para devolver os trechos que o passageiro comprou
+			// Estrutura que devolve os trechos que o passageiro comprou
 			type Reserva struct {
 				RideID      string  `json:"ride_id"`
 				DriverID    string  `json:"driver_id"`
@@ -527,7 +526,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			json.NewEncoder(conn).Encode(resposta)
 
 		case string(protocolo.PEER_BOOK_SEGMENT):
-			// 1. Decodifica o pedido que veio do outro servidor
+			// decodifica o pedido que veio do outro servidor
 			var req struct {
 				PassengerID string `json:"passenger_id"`
 				RideID      string `json:"ride_id"`
@@ -536,7 +535,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			}
 			json.Unmarshal(msg.Payload, &req)
 
-			// 2. Tenta fazer a reserva localmente de forma segura
+			// tenta fazer a reserva localmente
 			state.mu.Lock()
 			sucesso := false
 			if ride, existe := state.rides[req.RideID]; existe {
@@ -554,7 +553,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			}
 			state.mu.Unlock()
 
-			// 3. Responde ao servidor Coordenador
+			// responde ao servidor cordenador
 			resp := protocolo.Message{Type: "SUCCESS"}
 			if !sucesso {
 				resp.Type = "ERROR"
@@ -627,7 +626,7 @@ func (s *ServerState) CarregarDados() {
 
 // escreve o estado atual da memória no arquivo JSON
 func (s *ServerState) SalvarDados() {
-	// Usamos MarshalIndent para o JSON ficar formatado e legível caso você abra o arquivo
+	// Usa o MarshalIndent para o JSON ficar formatado e legível
 	dados, err := json.MarshalIndent(s.rides, "", "  ")
 	if err != nil {
 		fmt.Println("[DB] Erro ao serializar dados para salvamento:", err)

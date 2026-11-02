@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"sync"
 
 	"github.com/GuiSantosHashDaSilva/PBLConcorrenciaAgoraVai/internals/protocolo"
 )
+
+const arquivoDB = "banco_de_dados.json"
 
 type ServerState struct {
 	mu         sync.Mutex
@@ -22,6 +25,7 @@ func main() {
 		rides:      make(map[string]*protocolo.RideRequest),
 		nextRideID: 1,
 	}
+	state.CarregarDados()
 
 	// Interface de socket nativa do TCP/IP
 	listener, err := net.Listen("tcp", ":8811")
@@ -50,7 +54,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 
 	for scanner.Scan() {
 		textoRecebido := scanner.Text()
-		fmt.Println("-> Recebido do cliente:", textoRecebido) 
+		fmt.Println("-> Recebido do cliente:", textoRecebido)
 
 		var msg protocolo.Message
 		if err := json.Unmarshal([]byte(textoRecebido), &msg); err != nil {
@@ -59,7 +63,6 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			continue
 		}
 
-		
 		switch string(msg.Type) {
 		case "LOGIN":
 			var req struct {
@@ -73,8 +76,6 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				continue
 			}
 
-			
-			
 			if req.Login != "" && req.Senha != "" {
 				fmt.Printf("<- Motorista '%s' autenticado com sucesso!\n", req.Login)
 				conn.Write([]byte(`{"status":"success", "message":"Login Efetuado com sucesso"}` + "\n"))
@@ -82,7 +83,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				fmt.Println("<- Falha no login: credenciais vazias.")
 				conn.Write([]byte(`{"status":"error", "message":"Login ou Senha incorreta"}` + "\n"))
 			}
-		
+
 		case "PUBLISH_RIDE":
 			var req protocolo.RideRequest
 
@@ -96,11 +97,12 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			rideID := fmt.Sprintf("%d", state.nextRideID)
 			state.nextRideID++
 			state.rides[rideID] = &req
+			state.SalvarDados()
 			state.mu.Unlock()
 
 			fmt.Println("<- Carona salva! Enviando sucesso.")
 			conn.Write([]byte(`{"status":"success", "message":"Ride published"}` + "\n"))
-		
+
 		case "CONSULT_RIDES":
 			var req struct {
 				DriverID string `json:"driver_id"`
@@ -145,6 +147,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			// Só cancela se a carona existir e for de quem pediu
 			if existe && ride.DriverID == req.DriverID {
 				delete(state.rides, req.RideID)
+				state.SalvarDados()
 				state.mu.Unlock()
 
 				fmt.Printf("<- Carona %s cancelada com sucesso!\n", req.RideID)
@@ -258,7 +261,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			// retorno
 			respostaBytes, _ := json.Marshal(map[string]any{
 				"status": "success",
-				"routes": rotasEncontradas, 
+				"routes": rotasEncontradas,
 			})
 			conn.Write(append(respostaBytes, '\n'))
 			fmt.Printf("<- BFS Concluído: %d rota(s) encontrada(s) de %s para %s no dia %s\n", len(rotasEncontradas), req.Origin, req.Destination, req.Date)
@@ -284,14 +287,14 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			for _, trechoReq := range req.Itinerary {
 				ride, existe := state.rides[trechoReq.RideID]
 				if !existe {
-					podeReservar = false 
+					podeReservar = false
 					break
 				}
 
 				trechoValido := false
 				for _, seg := range ride.Segments {
 					if seg.Origin == trechoReq.Origin && seg.Destination == trechoReq.Destination {
-						if seg.AvailableSeats < 1 { // Sem vagas nesse trecho 
+						if seg.AvailableSeats < 1 { // Sem vagas nesse trecho
 							podeReservar = false
 						}
 						trechoValido = true
@@ -315,6 +318,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 							ride.Segments[i].AvailableSeats--
 							// adiciona o passageiro no trecho
 							ride.Segments[i].Passengers = append(ride.Segments[i].Passengers, req.PassengerID)
+							state.SalvarDados()
 							break
 						}
 					}
@@ -350,7 +354,6 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				Price       float64 `json:"price"`
 			}
 			var minhasReservas []Reserva
-
 
 			for rideID, ride := range state.rides {
 				for _, seg := range ride.Segments {
@@ -433,4 +436,35 @@ func handleConnection(conn net.Conn, state *ServerState) {
 		fmt.Println("Cliente desconectado limparmente:", conn.RemoteAddr())
 	}
 
+}
+
+// lê o arquivo JSON e joga para a memória ao iniciar o servidor
+func (s *ServerState) CarregarDados() {
+	dados, err := os.ReadFile(arquivoDB)
+	if err != nil {
+		fmt.Println("[DB] Arquivo de dados não encontrado. Iniciando base limpa.")
+		return
+	}
+
+	err = json.Unmarshal(dados, &s.rides)
+	if err != nil {
+		fmt.Println("[DB] Erro ao decodificar o arquivo JSON:", err)
+		return
+	}
+	fmt.Println("[DB] Viagens anteriores carregadas com sucesso!")
+}
+
+// escreve o estado atual da memória no arquivo JSON
+func (s *ServerState) SalvarDados() {
+	// Usamos MarshalIndent para o JSON ficar formatado e legível caso você abra o arquivo
+	dados, err := json.MarshalIndent(s.rides, "", "  ")
+	if err != nil {
+		fmt.Println("[DB] Erro ao serializar dados para salvamento:", err)
+		return
+	}
+
+	err = os.WriteFile(arquivoDB, dados, 0644)
+	if err != nil {
+		fmt.Println("[DB] Erro ao escrever no arquivo JSON:", err)
+	}
 }

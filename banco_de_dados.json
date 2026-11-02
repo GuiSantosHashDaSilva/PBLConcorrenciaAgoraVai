@@ -1,0 +1,15 @@
+{
+  "1": {
+    "driver_id": "m1",
+    "date": "15-10-2025",
+    "segments": [
+      {
+        "origin": "a",
+        "destination": "b",
+        "available_seats": 2,
+        "price": 2,
+        "passengers": null
+      }
+    ]
+  }
+}

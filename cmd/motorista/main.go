@@ -16,12 +16,12 @@ type Message struct {
 }
 
 func main() {
-	enderecoServidor := os.Getenv("SERVER_ADDR")
-	if enderecoServidor == "" {
-		enderecoServidor = "localhost:8811"
+	serverAddr := os.Getenv("SERVER_ADDR")
+	if serverAddr == "" {
+		serverAddr = "localhost:8811"
 	}
 
-	conn, err := net.Dial("tcp", enderecoServidor)
+	conn, err := net.Dial("tcp", serverAddr)
 	if err != nil {
 		fmt.Println("Erro ao conectar ao servidor:", err)
 		return

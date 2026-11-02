@@ -16,12 +16,12 @@ type Message struct {
 }
 
 func main() {
-	enderecoServidor := os.Getenv("SERVER_ADDR")
-	if enderecoServidor == "" {
-		enderecoServidor = "localhost:8811" //pra rodar fora do Docker
+	serverAddr := os.Getenv("SERVER_ADDR")
+	if serverAddr == "" {
+		serverAddr = "localhost:8811" //pra rodar fora do Docker
 	}
 
-	conn, err := net.Dial("tcp", enderecoServidor)
+	conn, err := net.Dial("tcp", serverAddr)
 	if err != nil {
 		fmt.Println("Erro ao conectar ao servidor:", err)
 		return
@@ -73,7 +73,6 @@ func main() {
 	}
 }
 
-
 func autenticar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader) string {
 	fmt.Print("\n--- Login ---\nDigite seu Login (ID): ")
 	scanner.Scan()
@@ -94,7 +93,6 @@ func autenticar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader) str
 	}
 	return ""
 }
-
 
 func buscarEReservar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader, passengerID string) {
 	fmt.Print("\n--- Buscar Viagens ---\n")
@@ -130,6 +128,7 @@ func buscarEReservar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader
 			Origin      string  `json:"origin"`
 			Destination string  `json:"destination"`
 			Price       float64 `json:"price"`
+			ServerAddr  string  `json:"server_addr"`
 		} `json:"routes"`
 	}
 
@@ -171,6 +170,7 @@ func buscarEReservar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader
 				"ride_id":     trecho.RideID,
 				"origin":      trecho.Origin,
 				"destination": trecho.Destination,
+				"server_addr": trecho.ServerAddr,
 			})
 		}
 
@@ -227,7 +227,7 @@ func consultarReservas(conn net.Conn, leitor *bufio.Reader, passengerID string) 
 
 func cancelarReserva(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader, passengerID string) {
 	fmt.Print("\n--- Cancelar Reserva ---\n")
-	
+
 	fmt.Print("Digite o ID numérico da Carona (ex: 1, 2): ")
 	scanner.Scan()
 	rideID := strings.TrimSpace(scanner.Text())

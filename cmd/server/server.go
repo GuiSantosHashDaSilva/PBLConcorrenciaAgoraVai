@@ -6,35 +6,50 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/GuiSantosHashDaSilva/PBLConcorrenciaAgoraVai/internals/protocolo"
 )
 
-const arquivoDB = "banco_de_dados.json"
-
 type ServerState struct {
 	mu         sync.Mutex
 	rides      map[string]*protocolo.RideRequest
 	nextRideID int
+	peers      []string
+	dbFile     string
 }
 
 func main() {
 
+	// Lê a porta da variável de ambiente; se não existir, usa 8811
+	porta := os.Getenv("PORT")
+	if porta == "" {
+		porta = "8811"
+	}
 	state := &ServerState{
 		rides:      make(map[string]*protocolo.RideRequest),
+		dbFile:     "db_" + porta + ".json",
 		nextRideID: 1,
 	}
 	state.CarregarDados()
 
-	// Interface de socket nativa do TCP/IP
-	listener, err := net.Listen("tcp", ":8811")
+	peersEnv := os.Getenv("PEERS")
+	if peersEnv != "" {
+		state.peers = strings.Split(peersEnv, ",")
+		fmt.Println("Servidor configurado com os peers:", state.peers)
+	} else {
+		fmt.Println("Nenhum peer configurado. Rodando em modo isolado.")
+	}
+
+	// Interface de socket nativa do TCP/IP com porta dinâmica
+	listener, err := net.Listen("tcp", ":"+porta)
 	if err != nil {
-		fmt.Println("Erro ao iniciar servidor:", err)
+		fmt.Println("Erro ao iniciar servidor na porta", porta, ":", err)
 		return
 	}
 	defer listener.Close()
-	fmt.Println("Servidor central VAIJUNTO aguardando conexões na porta 8811...")
+	fmt.Printf("Servidor central VAIJUNTO aguardando conexões na porta %s...\n", porta)
 
 	for {
 		conn, err := listener.Accept()
@@ -178,6 +193,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				Destination    string  `json:"destination"`
 				AvailableSeats int     `json:"available_seats"`
 				Price          float64 `json:"price"`
+				ServerAddr     string  `json:"server_addr,omitempty"`
 			}
 
 			state.mu.Lock()
@@ -201,6 +217,37 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				}
 			}
 			state.mu.Unlock()
+
+			// carrega viagens dos servers peers
+			reqPeer := protocolo.Message{Type: protocolo.PEER_FETCH_RIDES}
+			for _, peerAddr := range state.peers {
+				resp, err := state.EnviarParaPeer(peerAddr, reqPeer)
+				if err == nil && resp.Type == "SUCCESS" {
+					var viagensDoPeer map[string]*protocolo.RideRequest
+					if err := json.Unmarshal(resp.Payload, &viagensDoPeer); err == nil {
+
+						// Filtra e joga os trechos do vizinho no grafo
+						for rideID, ride := range viagensDoPeer {
+							if ride.Date == req.Date {
+								for _, seg := range ride.Segments {
+									if seg.AvailableSeats > 0 {
+										grafo[seg.Origin] = append(grafo[seg.Origin], TrechoInfo{
+											RideID:         rideID,
+											DriverID:       ride.DriverID,
+											Date:           ride.Date,
+											Origin:         seg.Origin,
+											Destination:    seg.Destination,
+											AvailableSeats: seg.AvailableSeats,
+											Price:          seg.Price,
+											ServerAddr:     peerAddr, // Marca que este trecho pertence a outro servidor
+										})
+									}
+								}
+							}
+						}
+					}
+				}
+			}
 
 			// Estrutura do BFS
 			var rotasEncontradas [][]TrechoInfo // Armazena os caminhos completos
@@ -273,6 +320,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 					RideID      string `json:"ride_id"`
 					Origin      string `json:"origin"`
 					Destination string `json:"destination"`
+					ServerAddr  string `json:"server_addr"`
 				} `json:"itinerary"`
 			}
 			if err := json.Unmarshal(msg.Payload, &req); err != nil {
@@ -280,55 +328,97 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				continue
 			}
 
-			state.mu.Lock()
+			// Vamos registrar quais peers já confirmaram a reserva para caso de Rollback
+			sucessoPeers := []struct{ Addr, RideID, Orig, Dest string }{}
+			sucessoLocais := []struct{ RideID, Orig, Dest string }{}
 
-			// Verificação atomica
 			podeReservar := true
+
 			for _, trechoReq := range req.Itinerary {
-				ride, existe := state.rides[trechoReq.RideID]
-				if !existe {
-					podeReservar = false
-					break
-				}
+				if trechoReq.ServerAddr != "" {
+					// TRECHO REMOTO: Pede para o Peer reservar
+					payloadPeer, _ := json.Marshal(map[string]string{
+						"passenger_id": req.PassengerID,
+						"ride_id":      trechoReq.RideID,
+						"origin":       trechoReq.Origin,
+						"destination":  trechoReq.Destination,
+					})
 
-				trechoValido := false
-				for _, seg := range ride.Segments {
-					if seg.Origin == trechoReq.Origin && seg.Destination == trechoReq.Destination {
-						if seg.AvailableSeats < 1 { // Sem vagas nesse trecho
-							podeReservar = false
-						}
-						trechoValido = true
-						break
+					resp, err := state.EnviarParaPeer(trechoReq.ServerAddr, protocolo.Message{
+						Type:    protocolo.PEER_BOOK_SEGMENT,
+						Payload: payloadPeer,
+					})
+
+					if err != nil || resp.Type != "SUCCESS" {
+						podeReservar = false
+						break // Falhou num peer, aborta tudo
 					}
-				}
 
-				if !trechoValido || !podeReservar {
-					podeReservar = false
-					break
+					// Peer confirmou! Guarda para caso precise fazer rollback
+					sucessoPeers = append(sucessoPeers, struct{ Addr, RideID, Orig, Dest string }{
+						Addr: trechoReq.ServerAddr, RideID: trechoReq.RideID, Orig: trechoReq.Origin, Dest: trechoReq.Destination,
+					})
+
+				} else {
+					// TRECHO LOCAL: Faz a lógica que você já tinha, mas atua imediatamente
+					state.mu.Lock()
+					ride, existe := state.rides[trechoReq.RideID]
+					trechoReservado := false
+
+					if existe {
+						for i, seg := range ride.Segments {
+							if seg.Origin == trechoReq.Origin && seg.Destination == trechoReq.Destination {
+								if seg.AvailableSeats > 0 {
+									ride.Segments[i].AvailableSeats--
+									ride.Segments[i].Passengers = append(ride.Segments[i].Passengers, req.PassengerID)
+									trechoReservado = true
+									// Guarda para rollback local se der erro depois
+									sucessoLocais = append(sucessoLocais, struct{ RideID, Orig, Dest string }{
+										RideID: trechoReq.RideID, Orig: trechoReq.Origin, Dest: trechoReq.Destination,
+									})
+									state.SalvarDados()
+								}
+								break
+							}
+						}
+					}
+					state.mu.Unlock()
+
+					if !trechoReservado {
+						podeReservar = false
+						break // Falhou localmente, aborta tudo
+					}
 				}
 			}
 
-			// reservação atomica
 			if podeReservar {
-				for _, trechoReq := range req.Itinerary {
-					ride := state.rides[trechoReq.RideID]
+				fmt.Printf("<- Reserva distribuída concluída para o passageiro '%s'!\n", req.PassengerID)
+				conn.Write([]byte(`{"status":"success", "message":"Itinerário confirmado!"}` + "\n"))
+			} else {
+				// ROLLBACK! Desfaz tudo que tinha dado certo antes de falhar
+				for _, p := range sucessoPeers {
+					payloadUndo, _ := json.Marshal(map[string]string{
+						"passenger_id": req.PassengerID, "ride_id": p.RideID, "origin": p.Orig, "destination": p.Dest,
+					})
+					state.EnviarParaPeer(p.Addr, protocolo.Message{Type: protocolo.PEER_UNDO_SEGMENT, Payload: payloadUndo})
+				}
+
+				state.mu.Lock()
+				for _, l := range sucessoLocais {
+					ride := state.rides[l.RideID]
 					for i, seg := range ride.Segments {
-						if seg.Origin == trechoReq.Origin && seg.Destination == trechoReq.Destination {
-							// Desconta a vaga
-							ride.Segments[i].AvailableSeats--
-							// adiciona o passageiro no trecho
-							ride.Segments[i].Passengers = append(ride.Segments[i].Passengers, req.PassengerID)
-							state.SalvarDados()
+						if seg.Origin == l.Orig && seg.Destination == l.Dest {
+							ride.Segments[i].AvailableSeats++ // Devolve a vaga
+							// Remove o passageiro da lista (simplificação)
+							ride.Segments[i].Passengers = ride.Segments[i].Passengers[:len(ride.Segments[i].Passengers)-1]
 							break
 						}
 					}
 				}
+				state.SalvarDados()
 				state.mu.Unlock()
-				fmt.Printf("<- Reserva atômica concluída para o passageiro '%s'!\n", req.PassengerID)
-				conn.Write([]byte(`{"status":"success", "message":"Itinerário confirmado!"}` + "\n"))
-			} else {
-				state.mu.Unlock() // Libera o acesso para outros clientes
-				fmt.Println("<- Falha na reserva: Trechos indisponíveis.")
+
+				fmt.Println("<- Falha na reserva distribuída: Rollback executado.")
 				conn.Write([]byte(`{"status":"error", "message":"Um ou mais trechos estão lotados ou não existem."}` + "\n"))
 			}
 
@@ -424,6 +514,87 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				conn.Write([]byte(`{"status":"error", "message":"Reserva não encontrada neste trecho."}` + "\n"))
 			}
 
+		case string(protocolo.PEER_FETCH_RIDES):
+			state.mu.Lock()
+			// Transforma o mapa local num JSON para enviar ao peer solicitante
+			payload, _ := json.Marshal(state.rides)
+			state.mu.Unlock()
+
+			resposta := protocolo.Message{
+				Type:    "SUCCESS",
+				Payload: payload,
+			}
+			json.NewEncoder(conn).Encode(resposta)
+
+		case string(protocolo.PEER_BOOK_SEGMENT):
+			// 1. Decodifica o pedido que veio do outro servidor
+			var req struct {
+				PassengerID string `json:"passenger_id"`
+				RideID      string `json:"ride_id"`
+				Origin      string `json:"origin"`
+				Destination string `json:"destination"`
+			}
+			json.Unmarshal(msg.Payload, &req)
+
+			// 2. Tenta fazer a reserva localmente de forma segura
+			state.mu.Lock()
+			sucesso := false
+			if ride, existe := state.rides[req.RideID]; existe {
+				for i, seg := range ride.Segments {
+					if seg.Origin == req.Origin && seg.Destination == req.Destination {
+						if seg.AvailableSeats > 0 { // Confirma se ainda tem vaga
+							ride.Segments[i].AvailableSeats--
+							ride.Segments[i].Passengers = append(ride.Segments[i].Passengers, req.PassengerID)
+							state.SalvarDados()
+							sucesso = true
+						}
+						break
+					}
+				}
+			}
+			state.mu.Unlock()
+
+			// 3. Responde ao servidor Coordenador
+			resp := protocolo.Message{Type: "SUCCESS"}
+			if !sucesso {
+				resp.Type = "ERROR"
+			}
+			json.NewEncoder(conn).Encode(resp)
+
+		case string(protocolo.PEER_UNDO_SEGMENT):
+			// 1. Decodifica o pedido de Rollback
+			var req struct {
+				PassengerID string `json:"passenger_id"`
+				RideID      string `json:"ride_id"`
+				Origin      string `json:"origin"`
+				Destination string `json:"destination"`
+			}
+			json.Unmarshal(msg.Payload, &req)
+
+			// 2. Desfaz a reserva (devolve a vaga e remove o passageiro)
+			state.mu.Lock()
+			if ride, existe := state.rides[req.RideID]; existe {
+				for i, seg := range ride.Segments {
+					if seg.Origin == req.Origin && seg.Destination == req.Destination {
+						ride.Segments[i].AvailableSeats++ // Devolve a vaga
+
+						// Busca o passageiro na lista e o remove
+						for j, p := range ride.Segments[i].Passengers {
+							if p == req.PassengerID {
+								ride.Segments[i].Passengers = append(ride.Segments[i].Passengers[:j], ride.Segments[i].Passengers[j+1:]...)
+								break
+							}
+						}
+						state.SalvarDados()
+						break
+					}
+				}
+			}
+			state.mu.Unlock()
+
+			// Confirma que o desfazimento foi feito
+			json.NewEncoder(conn).Encode(protocolo.Message{Type: "SUCCESS"})
+
 		default:
 			fmt.Printf("<- TIPO DESCONHECIDO: '%s'\n", msg.Type)
 			conn.Write([]byte(`{"status":"error", "message":"Unknown type"}` + "\n"))
@@ -440,7 +611,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 
 // lê o arquivo JSON e joga para a memória ao iniciar o servidor
 func (s *ServerState) CarregarDados() {
-	dados, err := os.ReadFile(arquivoDB)
+	dados, err := os.ReadFile(s.dbFile)
 	if err != nil {
 		fmt.Println("[DB] Arquivo de dados não encontrado. Iniciando base limpa.")
 		return
@@ -463,8 +634,32 @@ func (s *ServerState) SalvarDados() {
 		return
 	}
 
-	err = os.WriteFile(arquivoDB, dados, 0644)
+	err = os.WriteFile(s.dbFile, dados, 0644)
 	if err != nil {
 		fmt.Println("[DB] Erro ao escrever no arquivo JSON:", err)
 	}
+}
+
+// envia uma requisição TCP para um servidor vizinho e retorna a resposta
+func (s *ServerState) EnviarParaPeer(peerAddr string, req protocolo.Message) (protocolo.Message, error) {
+	conn, err := net.Dial("tcp", peerAddr)
+	if err != nil {
+		return protocolo.Message{}, fmt.Errorf("falha ao conectar no peer %s: %v", peerAddr, err)
+	}
+	defer conn.Close()
+
+	// Codifica a requisição
+	encoder := json.NewEncoder(conn)
+	if err := encoder.Encode(req); err != nil {
+		return protocolo.Message{}, fmt.Errorf("falha ao enviar para %s: %v", peerAddr, err)
+	}
+
+	// Lê a resposta do peer
+	var resp protocolo.Message
+	decoder := json.NewDecoder(conn)
+	if err := decoder.Decode(&resp); err != nil {
+		return protocolo.Message{}, fmt.Errorf("falha ao ler resposta de %s: %v", peerAddr, err)
+	}
+
+	return resp, nil
 }

@@ -1,156 +1,83 @@
-# 🚗 Vai Junto - Sistema de Caronas Distribuído
+# 🚗 Vai Junto - Sistema Distribuído de Caronas (Consórcio)
 
-Este projeto é um sistema distribuído de caronas desenvolvido em **Go (Golang)** utilizando comunicação via **Sockets TCP** e troca de mensagens no formato **JSON**. 
+Este projeto implementa um sistema de caronas verdadeiramente distribuído desenvolvido em **Go (Golang)**. Criado para a disciplina de Concorrência e Conectividade (TEC502 - Problema 2), o sistema simula um consórcio de empresas operando em rede. 
 
-Desenvolvido como trabalho acadêmico, o sistema implementa uma arquitetura Cliente-Servidor e lida com problemas de sistemas distribuídos, como concorrência e gerenciamento de estado.
+A arquitetura adota um modelo híbrido: comunicação via **Sockets TCP (JSON)** entre clientes e servidores, e uma **API REST (HTTP/JSON)** para a comunicação distribuída entre os servidores parceiros (peers).
 
 ---
 
 ## 🛠️ Tecnologias Utilizadas
 
-- **Linguagem:** Go 1.21+
-- **Comunicação:** TCP/IP nativo
-- **Protocolo:** JSON customizado sobre TCP
-- **Infraestrutura:** Docker e Docker Compose
+- **Linguagem:** Go 1.22+
+- **Comunicação Cliente-Servidor:** TCP/IP nativo com payload JSON
+- **Comunicação Server-to-Server:** API REST (HTTP GET/POST)
+- **Sincronização:** `sync.Mutex`, Goroutines, Timestamps
+- **Testes:** `httptest` (Mocking de rede)
+- **Infraestrutura/Emulação:** Docker e Docker Compose
 
 ---
 
-## ⚙️ Funcionalidades e Arquitetura
+## ⚙️ Arquitetura e Soluções Distribuídas (Barema)
 
-- **Roteamento em Grafo (Busca em Largura - BFS):** O servidor conecta trechos de diferentes motoristas para formar rotas. Se o João vai de A para B, e a Maria vai de B para C, o sistema sugere a rota completa de A para C.
-- **Reserva Atômica:** Garante que um passageiro só consiga reservar uma rota composta se todas as vagas de todos os trechos estiverem disponíveis simultaneamente.
-- **Controle de Concorrência:** Utiliza `sync.Mutex` no servidor para impedir condições de corrida, garantindo que múltiplas reservas no mesmo tempo não resultem em vagas negativas.
-- **Painel do Motorista:** Publicação e cancelamento de viagens, além da visualização de histórico com a identificação dos passageiros confirmados.
-- **Painel do Passageiro:** Busca inteligente com soma de preços, reserva atômica direta e cancelamento de trechos (devolvendo a vaga).
+O sistema foi arquitetado para lidar com os desafios clássicos de sistemas distribuídos:
+
+- **Busca Distribuída (BFS):** Quando um cliente faz uma busca local, o servidor realiza requisições REST `GET /api/rides` para os servidores vizinhos, mescla os grafos em memória e executa uma Busca em Largura (BFS) para sugerir rotas intermunicipais operadas por empresas diferentes.
+- **Reserva Atômica e Two-Phase Commit (2PC):** A reserva de um roteiro composto exige a alocação de vagas em múltiplos servidores. O servidor de origem atua como Coordenador, garantindo que o passageiro reserve tudo ou sofra *rollback* total (`POST /api/book/undo`) caso falte vaga num dos nós da rede.
+- **Prevenção de Deadlock Distribuído:** Para evitar impasses onde Servidor A espera o B e o B espera o A (espera circular), o coordenador aplica ordenação lexicográfica aos recursos (IDs de trechos) antes de iniciar as requisições de travamento.
+- **Exclusão Mútua e Precedência:** Condições de corrida na memória são mitigadas por `sync.Mutex`. Em caso de requisições simultâneas para o mesmo trecho, o coordenador envia um *Timestamp* (UnixNano) para garantir a precedência temporal.
+- **Cancelamento em Cascata:** Se um motorista cancelar uma viagem no Servidor A, o sistema expulsa os passageiros afetados e dispara requisições REST `POST /api/cascade-cancel` limpando os trechos dependentes daquele passageiro no Servidor B.
+- **Tolerância a Falhas:** As requisições entre servidores possuem *timeouts* restritos (3s). Se o Servidor B cair, o Servidor A não congela; ele aborta a transação e mantém o sistema operante. A persistência de dados JSON permite a recuperação do estado do Servidor B assim que ele for reiniciado.
 
 ---
 
-## 📡 Protocolo de Comunicação (Exemplos)
+## 🚀 Como Executar e Testar (Topologia do Laboratório)
 
-Toda mensagem trafegada via TCP utiliza um padrão universal contendo o `type` da requisição e o `payload` (dados). O servidor sempre devolve um JSON contendo o `status` (success/error) e uma `message`.
+O sistema está preparado para rodar em uma topologia física de 3 computadores, utilizando um único arquivo `docker-compose.yml`.
 
-**1. Exemplo de Publicação de Carona (`PUBLISH_RIDE`)**
-*Cliente envia:*
-```json
-{
-  "type": "PUBLISH_RIDE",
-  "payload": {
-    "driver_id": "motorista_01",
-    "date": "15-10-2026",
-    "segments": [
-      {
-        "origin": "Salvador",
-        "destination": "Feira de Santana",
-        "available_seats": 4,
-        "price": 40.00
-      }
-    ]
-  }
-}
-```
-*Servidor responde:*
-```json
-{"status": "success", "message": "Carona publicada com sucesso!"}
+**Pré-requisitos:** Descubra os IPs locais (ex: `192.168.1.51` e `192.168.1.52`) das máquinas 1 e 2. Edite o arquivo `docker-compose.yml` preenchendo a variável `PEERS` com esses IPs.
+
+### 1. Inicializando os Servidores (Consórcio Docker)
+
+**No Computador 1 (Servidor Empresa A):**
+Abra o terminal na raiz do projeto e inicie apenas o contêiner A:
+```bash
+docker compose up empresa_a --build
 ```
 
-**2. Exemplo de Reserva Atômica (`BOOK_ROUTE`)**
-*Cliente envia um array de trechos (que podem pertencer a motoristas distintos). O Servidor processa tudo em bloco usando `sync.Mutex`:*
-```json
-{
-  "type": "BOOK_ROUTE",
-  "payload": {
-    "passenger_id": "passageiro_01",
-    "itinerary": [
-      {
-        "ride_id": "motorista_01-15-10-2025",
-        "origin": "Salvador",
-        "destination": "Feira de Santana"
-      }
-    ]
-  }
-}
-```
-*Servidor responde (em caso de sucesso):*
-```json
-{"status": "success", "message": "Itinerário confirmado!"}
+**No Computador 2 (Servidor Empresa B):**
+Abra o terminal na raiz do projeto e inicie apenas o contêiner B:
+```bash
+docker compose up empresa_b --build
 ```
 
----
+### 2. Conectando os Clientes
 
-## Como Executar o Sistema no Terminal
+**No Computador 3 (Estação de Clientes):**
+Não é necessário Docker. Abra múltiplos terminais e execute os clientes Go nativamente. Quando o programa solicitar o IP, aponte para as máquinas 1 e 2.
 
-Você pode executar o sistema utilizando Docker ou localmente via Go.
+- **Terminal 1 (Motorista):** `go run cmd/motorista/main.go` -> Conecta em `192.168.1.51:8811`
+- **Terminal 2 (Motorista):** `go run cmd/motorista/main.go` -> Conecta em `192.168.1.52:8812`
+- **Terminal 3 (Passageiro):** `go run cmd/passageiro/main.go` -> Conecta em `192.168.1.51:8811`
 
-### Opção A: Execução via Docker Compose
-*Pré-requisito: Docker e Docker Compose instalados.*
+### 3. Roteiro de Uso
 
-Abra **três terminais diferentes** na raiz do projeto e siga a ordem:
-
-1. **Terminal 1 (Servidor):**
-   ```bash
-   docker-compose up -d server
-   docker-compose logs -f server
-   ```
-   *(Este terminal ficará aberto exibindo os logs e conexões da rede em tempo real).*
-
-2. **Terminal 2 (Motorista):**
-   ```bash
-   docker-compose run -e SERVER_ADDR="ipdamaquina:8811" motorista
-   ```
-
-3. **Terminal 3 (Passageiro):**
-   ```bash
-   docker-compose run -e SERVER_ADDR="ipdamaquina:8811" passageiro
-   ```
-
-*(Para desligar tudo ao final do uso, execute: `docker-compose down`)*
-
-### Opção B: Execução Local Sem Docker
-*Pré-requisito: Go 1.21+ instalado na máquina.*
-
-Abra **três terminais diferentes** na raiz do projeto:
-
-1. **Terminal 1:** `go run server.go`
-2. **Terminal 2:** `go run cliente_motorista.go`
-3. **Terminal 3:** `go run cliente_passageiro.go`
+1. **Motorista 1** publica uma carona de *Feira* para *Santo Amaro*.
+2. **Motorista 2** publica de *Santo Amaro* para *Salvador*.
+3. **Passageiro 1** busca uma viagem de *Feira* para *Salvador*. O sistema distribuído unirá os trechos e calculará o preço total.
+4. O Passageiro seleciona a rota composta, disparando o processo atômico de reserva através da rede (REST).
 
 ---
 
-## Como Usar o Sistema
+## 🧪 Bateria de Testes Distribuídos
 
-Para testar todas as funcionalidades do sistema, siga este roteiro de uso com os painéis abertos:
+O projeto acompanha arquivos de testes robustos (`server_test.go`) para atestar as regras de concorrência e consistência através de *mocks* HTTP REST.
 
-### Passo 1: Publicando uma Carona (Painel do Motorista)
-1. No terminal do motorista, escolha a opção **1** para fazer o Login (ex: Login: `joao`, Senha: `123`).
-2. Escolha a opção **2 (Publicar Carona)**.
-3. Preencha os dados.
+Para validar, navegue até a pasta do servidor e execute:
+```bash
+cd cmd/server
+go test -v
+```
 
-
-### Passo 2: Buscando e Reservando (Painel do Passageiro)
-1. No terminal do passageiro, escolha a opção **1** para fazer o Login (ex: Login: `carlos`, Senha: `123`).
-2. Escolha a opção **2 (Buscar e Reservar Viagens)**.
-3. Digite a Origem (`Salvador`) e Destino (`Feira`).
-4. O sistema (usando BFS) retornará as opções disponíveis com o preço total calculado.
-5. Digite o **número da opção** desejada para efetuar a reserva. O servidor confirmará a reserva e descontará a vaga.
-
-### Passo 3: Consultando o Histórico
-- **No Motorista:** Escolha a opção **3 (Consultar Minhas Caronas)**. Você verá a carona publicada, as vagas restantes e o ID do passageiro `carlos` confirmado.
-- **No Passageiro:** Escolha a opção **3 (Consultar Minhas Reservas)** para visualizar os detalhes do trecho adquirido.
-
-### Passo 4: Cancelamento (Opcional)
-- O **Passageiro** pode usar a opção **4** para cancelar a reserva, o que devolve a vaga para o motorista automaticamente.
-- O **Motorista** pode usar a opção **4** para cancelar a viagem inteira.
-
----
-
-## Teste de Concorrência e Proteção Mutex
-
-O projeto acompanha um script de estresse para provar o funcionamento da exclusão mútua (`sync.Mutex`). O teste publica uma carona com apenas 5 vagas e lança **50 passageiros concorrentes** tentando reservar exatamente no mesmo instante.
-
-Para executar e validar:
-1. Certifique-se de que o Servidor está rodando (Terminal 1).
-2. Abra um novo terminal e execute:
-   ```bash
-   go run cmd/teste_concorrencia.go
-   ```
-**Resultado Esperado:** O sistema garantirá que apenas 5 requisições tenham sucesso e 45 falhem, exibindo a mensagem: `passou: O Mutex funcionou, nenhuma vaga foi vendida a mais e não houve corrida`. Nenhuma vaga extra será criada ou vendida.
+Os testes validarão dois cenários cruciais:
+1. **`TestConcurrencyBookSegment`:** Simula 3 requisições REST simultâneas disputando uma única vaga, atestando a robustez da `sync.Mutex` ao garantir 1 sucesso e 2 conflitos corretos.
+2. **`TestCascadeCancelREST`:** Injeta um payload de *Cascade Cancel* simulando um vizinho da rede. Atesta se o servidor processa o aviso, expulsa o passageiro dependente, devolve a vaga à rede e salva os novos dados consistentes no disco.

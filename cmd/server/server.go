@@ -430,10 +430,6 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				continue
 			}
 
-			// Trava o estado para buscar
-			state.mu.Lock()
-
-			// Estrutura que devolve os trechos que o passageiro comprou
 			type Reserva struct {
 				RideID      string  `json:"ride_id"`
 				DriverID    string  `json:"driver_id"`
@@ -444,6 +440,8 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			}
 			var minhasReservas []Reserva
 
+			// 1. Busca no servidor LOCAL
+			state.mu.Lock()
 			for rideID, ride := range state.rides {
 				for _, seg := range ride.Segments {
 					for _, passID := range seg.Passengers {
@@ -456,19 +454,36 @@ func handleConnection(conn net.Conn, state *ServerState) {
 								Destination: seg.Destination,
 								Price:       seg.Price,
 							})
-							break
+							break // Vai pro próximo segmento
 						}
 					}
 				}
 			}
 			state.mu.Unlock()
 
+			// 2. Busca nos servidores VIZINHOS (Peers)
+			reqPeer := protocolo.Message{
+				Type:    protocolo.PEER_FETCH_PASSENGER_RIDES,
+				Payload: msg.Payload, // Repassa o JSON com o PassengerID
+			}
+			for _, peerAddr := range state.peers {
+				resp, err := state.EnviarParaPeer(peerAddr, reqPeer)
+				if err == nil && resp.Type == "SUCCESS" {
+					var reservasDoPeer []Reserva
+					if err := json.Unmarshal(resp.Payload, &reservasDoPeer); err == nil {
+						// Junta as reservas do vizinho na lista final
+						minhasReservas = append(minhasReservas, reservasDoPeer...)
+					}
+				}
+			}
+
+			// 3. Envolve a lista combinada e envia ao cliente
 			respostaBytes, _ := json.Marshal(map[string]any{
 				"status":       "success",
 				"reservations": minhasReservas,
 			})
 			conn.Write(append(respostaBytes, '\n'))
-			fmt.Printf("<- Enviando reservas para o passageiro '%s'\n", req.PassengerID)
+			fmt.Printf("<- Enviando reservas globais para o passageiro '%s'\n", req.PassengerID)
 
 		case "CANCEL_RESERVATION":
 			var req struct {
@@ -482,6 +497,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				continue
 			}
 
+			// 1. TENTA CANCELAR LOCALMENTE PRIMEIRO
 			state.mu.Lock()
 			ride, existe := state.rides[req.RideID]
 			sucesso := false
@@ -491,10 +507,12 @@ func handleConnection(conn net.Conn, state *ServerState) {
 					if seg.Origin == req.Origin && seg.Destination == req.Destination {
 						for j, passID := range seg.Passengers {
 							if passID == req.PassengerID {
+								// Remove o passageiro
 								ride.Segments[i].Passengers = append(seg.Passengers[:j], seg.Passengers[j+1:]...)
-
+								// Devolve a vaga
 								ride.Segments[i].AvailableSeats++
 
+								state.SalvarDados() // <-- Muito importante salvar o estado atualizado!
 								sucesso = true
 								break
 							}
@@ -505,12 +523,30 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			}
 			state.mu.Unlock()
 
+			// 2. SE NÃO ENCONTROU LOCALMENTE, PERGUNTA AOS PEERS (REDE DISTRIBUÍDA)
+			if !sucesso {
+				// Reutilizamos a requisição de Rollback que criamos no Two-Phase Commit
+				reqPeer := protocolo.Message{
+					Type:    protocolo.PEER_UNDO_SEGMENT,
+					Payload: msg.Payload, // O payload atual já tem os dados perfeitos (PassengerID, RideID, etc)
+				}
+
+				for _, peerAddr := range state.peers {
+					resp, err := state.EnviarParaPeer(peerAddr, reqPeer)
+					if err == nil && resp.Type == "SUCCESS" {
+						sucesso = true
+						break // O peer confirmou que a viagem era dele e cancelou. Fim da busca!
+					}
+				}
+			}
+
+			// 3. DEVOLVE A RESPOSTA FINAL AO CLIENTE
 			if sucesso {
 				fmt.Printf("<- Reserva cancelada! Vaga devolvida. (Passageiro: %s | Trecho: %s -> %s)\n", req.PassengerID, req.Origin, req.Destination)
 				conn.Write([]byte(`{"status":"success", "message":"Reserva cancelada com sucesso! Vaga devolvida."}` + "\n"))
 			} else {
-				fmt.Printf("<- Falha ao cancelar: Reserva de '%s' não encontrada.\n", req.PassengerID)
-				conn.Write([]byte(`{"status":"error", "message":"Reserva não encontrada neste trecho."}` + "\n"))
+				fmt.Printf("<- Falha ao cancelar: Reserva de '%s' não encontrada em nenhum servidor.\n", req.PassengerID)
+				conn.Write([]byte(`{"status":"error", "message":"Reserva não encontrada em nenhum trecho na rede."}` + "\n"))
 			}
 
 		case string(protocolo.PEER_FETCH_RIDES):
@@ -559,6 +595,47 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				resp.Type = "ERROR"
 			}
 			json.NewEncoder(conn).Encode(resp)
+
+		case string(protocolo.PEER_FETCH_PASSENGER_RIDES):
+			var req struct {
+				PassengerID string `json:"passenger_id"`
+			}
+			json.Unmarshal(msg.Payload, &req)
+
+			type Reserva struct {
+				RideID      string  `json:"ride_id"`
+				DriverID    string  `json:"driver_id"`
+				Date        string  `json:"date"`
+				Origin      string  `json:"origin"`
+				Destination string  `json:"destination"`
+				Price       float64 `json:"price"`
+			}
+			var reservasPeer []Reserva
+
+			// Varre a memória do peer
+			state.mu.Lock()
+			for rideID, ride := range state.rides {
+				for _, seg := range ride.Segments {
+					for _, passID := range seg.Passengers {
+						if passID == req.PassengerID {
+							reservasPeer = append(reservasPeer, Reserva{
+								RideID:      rideID,
+								DriverID:    ride.DriverID,
+								Date:        ride.Date,
+								Origin:      seg.Origin,
+								Destination: seg.Destination,
+								Price:       seg.Price,
+							})
+							break
+						}
+					}
+				}
+			}
+			state.mu.Unlock()
+
+			// Converte a lista para JSON e manda de volta como payload
+			payloadResp, _ := json.Marshal(reservasPeer)
+			conn.Write(append([]byte(`{"type":"SUCCESS", "payload":`+string(payloadResp)+`}`), '\n'))
 
 		case string(protocolo.PEER_UNDO_SEGMENT):
 			// 1. Decodifica o pedido de Rollback

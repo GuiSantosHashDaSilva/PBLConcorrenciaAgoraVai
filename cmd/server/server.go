@@ -2,12 +2,18 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/GuiSantosHashDaSilva/PBLConcorrenciaAgoraVai/internals/protocolo"
 )
@@ -21,12 +27,16 @@ type ServerState struct {
 }
 
 func main() {
-
-	// Lê a porta da variável de ambiente; se não existir, usa 8811
+	// olha a porta TCP da variável de ambiente; se não existir, usa 8811
 	porta := os.Getenv("PORT")
 	if porta == "" {
 		porta = "8811"
 	}
+
+	// calcula a porta REST (ex: se TCP for 8811, REST vai ser 9811)
+	portaInt, _ := strconv.Atoi(porta)
+	portaREST := strconv.Itoa(portaInt + 1000)
+
 	state := &ServerState{
 		rides:      make(map[string]*protocolo.RideRequest),
 		dbFile:     "db_" + porta + ".json",
@@ -37,26 +47,42 @@ func main() {
 	peersEnv := os.Getenv("PEERS")
 	if peersEnv != "" {
 		state.peers = strings.Split(peersEnv, ",")
-		fmt.Println("Servidor configurado com os peers:", state.peers)
+		fmt.Println("Servidor configurado com os peers TCP:", state.peers)
 	} else {
 		fmt.Println("Nenhum peer configurado. Rodando em modo isolado.")
 	}
 
-	// Interface de socket nativa do TCP/IP com porta dinâmica
+	// inicio do server http peer
+	go func() {
+		mux := http.NewServeMux()
+		// rotas
+		mux.HandleFunc("/api/rides", state.handlerGetRides)
+		mux.HandleFunc("/api/book", state.handlerBookSegment)
+		mux.HandleFunc("/api/book/undo", state.handlerUndoSegment)
+		mux.HandleFunc("/api/reservations", state.handlerGetReservations)
+		mux.HandleFunc("/api/cascade-cancel", state.handlerCascadeCancel)
+
+		fmt.Printf("Servidor REST escutando na porta %s...\n", portaREST)
+		if err := http.ListenAndServe(":"+portaREST, mux); err != nil {
+			fmt.Println("Erro no servidor REST:", err)
+		}
+	}()
+
+	// interface de socket TCP/IP para clientes
 	listener, err := net.Listen("tcp", ":"+porta)
 	if err != nil {
-		fmt.Println("Erro ao iniciar servidor na porta", porta, ":", err)
+		fmt.Println("Erro ao iniciar servidor TCP na porta", porta, ":", err)
 		return
 	}
 	defer listener.Close()
-	fmt.Printf("Servidor central VAIJUNTO aguardando conexões na porta %s...\n", porta)
+	fmt.Printf("Servidor TCP esperando clientes na porta %s...\n", porta)
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			continue
 		}
-		// Goroutine para cada cliente, permite atendimento simultâneo
+		// goroutine para cada cliente, atendimento simultâneo
 		go handleConnection(conn, state)
 	}
 }
@@ -155,21 +181,58 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				continue
 			}
 
-			// Trava o estado pra apagar
 			state.mu.Lock()
 			ride, existe := state.rides[req.RideID]
 
-			// Só cancela se a carona existir e for de quem pediu
 			if existe && ride.DriverID == req.DriverID {
+				dataDaViagem := ride.Date
+
+				// identifica todos os passageiros que perdem a viagem
+				passageirosAfetados := make(map[string]bool)
+				for _, seg := range ride.Segments {
+					for _, p := range seg.Passengers {
+						passageirosAfetados[p] = true
+					}
+				}
+
+				// exclui a carona cancelada
 				delete(state.rides, req.RideID)
+
+				// remove os mesmos passageiros de outras caronas no mesmo servidor e data
+				for pID := range passageirosAfetados {
+					for _, outrasRides := range state.rides {
+						if outrasRides.Date == dataDaViagem {
+							for i, seg := range outrasRides.Segments {
+								for j, passID := range seg.Passengers {
+									if passID == pID {
+										outrasRides.Segments[i].Passengers = append(seg.Passengers[:j], seg.Passengers[j+1:]...)
+										outrasRides.Segments[i].AvailableSeats++
+										break
+									}
+								}
+							}
+						}
+					}
+				}
 				state.SalvarDados()
 				state.mu.Unlock()
 
-				fmt.Printf("<- Carona %s cancelada com sucesso!\n", req.RideID)
-				conn.Write([]byte(`{"status":"success", "message":"Carona cancelada com sucesso"}` + "\n"))
+				// avisa os Peers via REST para cancelarem o resto da viagem
+				for pID := range passageirosAfetados {
+					payload := map[string]string{
+						"passenger_id": pID,
+						"date":         dataDaViagem,
+					}
+					for _, peerAddr := range state.peers {
+						// manda a requisição para limpar os nós vizinhos
+						state.RequestPeerREST(peerAddr, "/api/cascade-cancel", http.MethodPost, payload)
+					}
+				}
+
+				fmt.Printf("<- Carona %s cancelada com sucesso. Itinerários dependentes foram desfeitos.\n", req.RideID)
+				conn.Write([]byte(`{"status":"success", "message":"Carona cancelada e passageiros notificados."}` + "\n"))
 			} else {
 				state.mu.Unlock()
-
 				fmt.Printf("<- Falha ao cancelar: Carona %s não encontrada ou sem permissão.\n", req.RideID)
 				conn.Write([]byte(`{"status":"error", "message":"Carona não encontrada ou permissão negada"}` + "\n"))
 			}
@@ -218,15 +281,13 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			}
 			state.mu.Unlock()
 
-			// carrega viagens dos servers peers
-			reqPeer := protocolo.Message{Type: protocolo.PEER_FETCH_RIDES}
+			// carrega viagens dos servers peers pela API REST
 			for _, peerAddr := range state.peers {
-				resp, err := state.EnviarParaPeer(peerAddr, reqPeer)
-				if err == nil && resp.Type == "SUCCESS" {
+				respBytes, err := state.RequestPeerREST(peerAddr, "/api/rides", http.MethodGet, nil)
+				if err == nil {
 					var viagensDoPeer map[string]*protocolo.RideRequest
-					if err := json.Unmarshal(resp.Payload, &viagensDoPeer); err == nil {
-
-						// Filtra e joga os trechos do vizinho no grafo
+					if err := json.Unmarshal(respBytes, &viagensDoPeer); err == nil {
+						// Filtra e junta os trechos do vizinho no grafo
 						for rideID, ride := range viagensDoPeer {
 							if ride.Date == req.Date {
 								for _, seg := range ride.Segments {
@@ -239,7 +300,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 											Destination:    seg.Destination,
 											AvailableSeats: seg.AvailableSeats,
 											Price:          seg.Price,
-											ServerAddr:     peerAddr, // Marca que este trecho é de outro servidor
+											ServerAddr:     peerAddr, // marca que este trecho é de outro servidor
 										})
 									}
 								}
@@ -328,7 +389,19 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				continue
 			}
 
-			// registra quais peers já confirmaram a reserva caso dê Rollback
+			// gera uma marca de tempo pra ter precedência
+			// captura o momento exato em que o server coordenador começa a transação
+			timestampTransacao := time.Now().UnixNano()
+
+			// ordenação global pra evitar deadlock
+			// oredena os trechos e garante que todos os servidores tentem travar os recursos sempre na mesma ordem
+			sort.Slice(req.Itinerary, func(i, j int) bool {
+				strI := req.Itinerary[i].ServerAddr + req.Itinerary[i].RideID
+				strJ := req.Itinerary[j].ServerAddr + req.Itinerary[j].RideID
+				return strI < strJ
+			})
+
+			// registra qual peers já confirmou a reserva caso dê rollback
 			sucessoPeers := []struct{ Addr, RideID, Orig, Dest string }{}
 			sucessoLocais := []struct{ RideID, Orig, Dest string }{}
 
@@ -336,22 +409,20 @@ func handleConnection(conn net.Conn, state *ServerState) {
 
 			for _, trechoReq := range req.Itinerary {
 				if trechoReq.ServerAddr != "" {
-					// pede para o Peer reservar
-					payloadPeer, _ := json.Marshal(map[string]string{
+					// pede para o Peer reservar pelo POST (REST)
+					payloadPeer := map[string]any{
 						"passenger_id": req.PassengerID,
 						"ride_id":      trechoReq.RideID,
 						"origin":       trechoReq.Origin,
 						"destination":  trechoReq.Destination,
-					})
+						"timestamp":    timestampTransacao, // manda o critério de precedência
+					}
 
-					resp, err := state.EnviarParaPeer(trechoReq.ServerAddr, protocolo.Message{
-						Type:    protocolo.PEER_BOOK_SEGMENT,
-						Payload: payloadPeer,
-					})
-
-					if err != nil || resp.Type != "SUCCESS" {
+					_, err := state.RequestPeerREST(trechoReq.ServerAddr, "/api/book", http.MethodPost, payloadPeer)
+					if err != nil {
+						// o erro pega tanto falhas de timeout quanto o conflito 409 do HTTP qnd n tem vagas
 						podeReservar = false
-						break // falhou num peer, para tudo
+						break // falhou num peer cancela tudo
 					}
 
 					// peer confirmou, guarda para caso precise fazer rollback
@@ -394,12 +465,12 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				fmt.Printf("<- Reserva distribuída concluída para o passageiro '%s'!\n", req.PassengerID)
 				conn.Write([]byte(`{"status":"success", "message":"Itinerário confirmado!"}` + "\n"))
 			} else {
-				// rollback
+				// rollback via REST
 				for _, p := range sucessoPeers {
-					payloadUndo, _ := json.Marshal(map[string]string{
+					payloadUndo := map[string]string{
 						"passenger_id": req.PassengerID, "ride_id": p.RideID, "origin": p.Orig, "destination": p.Dest,
-					})
-					state.EnviarParaPeer(p.Addr, protocolo.Message{Type: protocolo.PEER_UNDO_SEGMENT, Payload: payloadUndo})
+					}
+					state.RequestPeerREST(p.Addr, "/api/book/undo", http.MethodPost, payloadUndo)
 				}
 
 				state.mu.Lock()
@@ -440,7 +511,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			}
 			var minhasReservas []Reserva
 
-			// 1. Busca no servidor LOCAL
+			// busca no servidor local
 			state.mu.Lock()
 			for rideID, ride := range state.rides {
 				for _, seg := range ride.Segments {
@@ -454,30 +525,28 @@ func handleConnection(conn net.Conn, state *ServerState) {
 								Destination: seg.Destination,
 								Price:       seg.Price,
 							})
-							break // Vai pro próximo segmento
+							break // vai pro próximo segmento
 						}
 					}
 				}
 			}
 			state.mu.Unlock()
 
-			// 2. Busca nos servidores VIZINHOS (Peers)
-			reqPeer := protocolo.Message{
-				Type:    protocolo.PEER_FETCH_PASSENGER_RIDES,
-				Payload: msg.Payload, // Repassa o JSON com o PassengerID
-			}
+			// busca nos server peers via GET (REST) com query parameter
 			for _, peerAddr := range state.peers {
-				resp, err := state.EnviarParaPeer(peerAddr, reqPeer)
-				if err == nil && resp.Type == "SUCCESS" {
+				endpoint := fmt.Sprintf("/api/reservations?passenger_id=%s", req.PassengerID)
+				respBytes, err := state.RequestPeerREST(peerAddr, endpoint, http.MethodGet, nil)
+
+				if err == nil {
 					var reservasDoPeer []Reserva
-					if err := json.Unmarshal(resp.Payload, &reservasDoPeer); err == nil {
-						// Junta as reservas do vizinho na lista final
+					if err := json.Unmarshal(respBytes, &reservasDoPeer); err == nil {
+						// junta as reservas do vizinho na lista final
 						minhasReservas = append(minhasReservas, reservasDoPeer...)
 					}
 				}
 			}
 
-			// 3. Envolve a lista combinada e envia ao cliente
+			// manda a lista combinada pra o cliente
 			respostaBytes, _ := json.Marshal(map[string]any{
 				"status":       "success",
 				"reservations": minhasReservas,
@@ -497,7 +566,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				continue
 			}
 
-			// 1. TENTA CANCELAR LOCALMENTE PRIMEIRO
+			// tenta cancelar localmente
 			state.mu.Lock()
 			ride, existe := state.rides[req.RideID]
 			sucesso := false
@@ -523,24 +592,25 @@ func handleConnection(conn net.Conn, state *ServerState) {
 			}
 			state.mu.Unlock()
 
-			// 2. SE NÃO ENCONTROU LOCALMENTE, PERGUNTA AOS PEERS (REDE DISTRIBUÍDA)
+			// verifica se ta nos peers via REST
 			if !sucesso {
-				// Reutilizamos a requisição de Rollback que criamos no Two-Phase Commit
-				reqPeer := protocolo.Message{
-					Type:    protocolo.PEER_UNDO_SEGMENT,
-					Payload: msg.Payload, // O payload atual já tem os dados perfeitos (PassengerID, RideID, etc)
+				payloadUndo := map[string]string{
+					"passenger_id": req.PassengerID,
+					"ride_id":      req.RideID,
+					"origin":       req.Origin,
+					"destination":  req.Destination,
 				}
 
 				for _, peerAddr := range state.peers {
-					resp, err := state.EnviarParaPeer(peerAddr, reqPeer)
-					if err == nil && resp.Type == "SUCCESS" {
+					_, err := state.RequestPeerREST(peerAddr, "/api/book/undo", http.MethodPost, payloadUndo)
+					if err == nil {
 						sucesso = true
-						break // O peer confirmou que a viagem era dele e cancelou. Fim da busca!
+						break // o peer confirmou que a viagem era dele e cancelou
 					}
 				}
 			}
 
-			// 3. DEVOLVE A RESPOSTA FINAL AO CLIENTE
+			// devolve a resposta
 			if sucesso {
 				fmt.Printf("<- Reserva cancelada! Vaga devolvida. (Passageiro: %s | Trecho: %s -> %s)\n", req.PassengerID, req.Origin, req.Destination)
 				conn.Write([]byte(`{"status":"success", "message":"Reserva cancelada com sucesso! Vaga devolvida."}` + "\n"))
@@ -548,128 +618,6 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				fmt.Printf("<- Falha ao cancelar: Reserva de '%s' não encontrada em nenhum servidor.\n", req.PassengerID)
 				conn.Write([]byte(`{"status":"error", "message":"Reserva não encontrada em nenhum trecho na rede."}` + "\n"))
 			}
-
-		case string(protocolo.PEER_FETCH_RIDES):
-			state.mu.Lock()
-			// Transforma o mapa local num JSON para enviar ao peer solicitante
-			payload, _ := json.Marshal(state.rides)
-			state.mu.Unlock()
-
-			resposta := protocolo.Message{
-				Type:    "SUCCESS",
-				Payload: payload,
-			}
-			json.NewEncoder(conn).Encode(resposta)
-
-		case string(protocolo.PEER_BOOK_SEGMENT):
-			// decodifica o pedido que veio do outro servidor
-			var req struct {
-				PassengerID string `json:"passenger_id"`
-				RideID      string `json:"ride_id"`
-				Origin      string `json:"origin"`
-				Destination string `json:"destination"`
-			}
-			json.Unmarshal(msg.Payload, &req)
-
-			// tenta fazer a reserva localmente
-			state.mu.Lock()
-			sucesso := false
-			if ride, existe := state.rides[req.RideID]; existe {
-				for i, seg := range ride.Segments {
-					if seg.Origin == req.Origin && seg.Destination == req.Destination {
-						if seg.AvailableSeats > 0 { // Confirma se ainda tem vaga
-							ride.Segments[i].AvailableSeats--
-							ride.Segments[i].Passengers = append(ride.Segments[i].Passengers, req.PassengerID)
-							state.SalvarDados()
-							sucesso = true
-						}
-						break
-					}
-				}
-			}
-			state.mu.Unlock()
-
-			// responde ao servidor cordenador
-			resp := protocolo.Message{Type: "SUCCESS"}
-			if !sucesso {
-				resp.Type = "ERROR"
-			}
-			json.NewEncoder(conn).Encode(resp)
-
-		case string(protocolo.PEER_FETCH_PASSENGER_RIDES):
-			var req struct {
-				PassengerID string `json:"passenger_id"`
-			}
-			json.Unmarshal(msg.Payload, &req)
-
-			type Reserva struct {
-				RideID      string  `json:"ride_id"`
-				DriverID    string  `json:"driver_id"`
-				Date        string  `json:"date"`
-				Origin      string  `json:"origin"`
-				Destination string  `json:"destination"`
-				Price       float64 `json:"price"`
-			}
-			var reservasPeer []Reserva
-
-			// Varre a memória do peer
-			state.mu.Lock()
-			for rideID, ride := range state.rides {
-				for _, seg := range ride.Segments {
-					for _, passID := range seg.Passengers {
-						if passID == req.PassengerID {
-							reservasPeer = append(reservasPeer, Reserva{
-								RideID:      rideID,
-								DriverID:    ride.DriverID,
-								Date:        ride.Date,
-								Origin:      seg.Origin,
-								Destination: seg.Destination,
-								Price:       seg.Price,
-							})
-							break
-						}
-					}
-				}
-			}
-			state.mu.Unlock()
-
-			// Converte a lista para JSON e manda de volta como payload
-			payloadResp, _ := json.Marshal(reservasPeer)
-			conn.Write(append([]byte(`{"type":"SUCCESS", "payload":`+string(payloadResp)+`}`), '\n'))
-
-		case string(protocolo.PEER_UNDO_SEGMENT):
-			// 1. Decodifica o pedido de Rollback
-			var req struct {
-				PassengerID string `json:"passenger_id"`
-				RideID      string `json:"ride_id"`
-				Origin      string `json:"origin"`
-				Destination string `json:"destination"`
-			}
-			json.Unmarshal(msg.Payload, &req)
-
-			// 2. Desfaz a reserva (devolve a vaga e remove o passageiro)
-			state.mu.Lock()
-			if ride, existe := state.rides[req.RideID]; existe {
-				for i, seg := range ride.Segments {
-					if seg.Origin == req.Origin && seg.Destination == req.Destination {
-						ride.Segments[i].AvailableSeats++ // Devolve a vaga
-
-						// Busca o passageiro na lista e o remove
-						for j, p := range ride.Segments[i].Passengers {
-							if p == req.PassengerID {
-								ride.Segments[i].Passengers = append(ride.Segments[i].Passengers[:j], ride.Segments[i].Passengers[j+1:]...)
-								break
-							}
-						}
-						state.SalvarDados()
-						break
-					}
-				}
-			}
-			state.mu.Unlock()
-
-			// Confirma que o desfazimento foi feito
-			json.NewEncoder(conn).Encode(protocolo.Message{Type: "SUCCESS"})
 
 		default:
 			fmt.Printf("<- TIPO DESCONHECIDO: '%s'\n", msg.Type)
@@ -716,26 +664,234 @@ func (s *ServerState) SalvarDados() {
 	}
 }
 
-// envia uma requisição TCP para um servidor vizinho e retorna a resposta
-func (s *ServerState) EnviarParaPeer(peerAddr string, req protocolo.Message) (protocolo.Message, error) {
-	conn, err := net.Dial("tcp", peerAddr)
+// envia uma requisição REST para um servidor vizinho
+func (s *ServerState) RequestPeerREST(peerAddr string, endpoint string, method string, reqBody interface{}) ([]byte, error) {
+	// O peerAddr recebido é o TCP (ex: "localhost:8812"). Vamos converter para a porta REST (9812).
+	partes := strings.Split(peerAddr, ":")
+	host := "localhost"
+	portaTCP := "8812"
+	if len(partes) == 2 {
+		host = partes[0]
+		portaTCP = partes[1]
+	}
+	pInt, _ := strconv.Atoi(portaTCP)
+	portaREST := strconv.Itoa(pInt + 1000)
+	restAddr := fmt.Sprintf("%s:%s", host, portaREST)
+
+	url := fmt.Sprintf("http://%s%s", restAddr, endpoint)
+
+	var reqBytes []byte
+	var err error
+	if reqBody != nil {
+		reqBytes, err = json.Marshal(reqBody)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	req, err := http.NewRequest(method, url, bytes.NewBuffer(reqBytes))
 	if err != nil {
-		return protocolo.Message{}, fmt.Errorf("falha ao conectar no peer %s: %v", peerAddr, err)
+		return nil, err
 	}
-	defer conn.Close()
+	req.Header.Set("Content-Type", "application/json")
 
-	// Codifica a requisição
-	encoder := json.NewEncoder(conn)
-	if err := encoder.Encode(req); err != nil {
-		return protocolo.Message{}, fmt.Errorf("falha ao enviar para %s: %v", peerAddr, err)
-	}
-
-	// Lê a resposta do peer
-	var resp protocolo.Message
-	decoder := json.NewDecoder(conn)
-	if err := decoder.Decode(&resp); err != nil {
-		return protocolo.Message{}, fmt.Errorf("falha ao ler resposta de %s: %v", peerAddr, err)
+	// Cliente HTTP com limite de tempo. Se o Peer falhar ou demorar, a requisição é cancelada e o erro é tratado.
+	client := &http.Client{
+		Timeout: 3 * time.Second,
 	}
 
-	return resp, nil
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("falha ao contactar peer %s: %v", restAddr, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("peer %s retornou código de erro HTTP %d", restAddr, resp.StatusCode)
+	}
+
+	return io.ReadAll(resp.Body)
+}
+
+// handler API REST
+
+func (s *ServerState) handlerGetRides(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Método não permitido", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.mu.Lock()
+	payload, err := json.Marshal(s.rides)
+	s.mu.Unlock()
+
+	if err != nil {
+		http.Error(w, "Erro ao serializar dados", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(payload)
+}
+
+func (s *ServerState) handlerBookSegment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método não permitido", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		PassengerID string `json:"passenger_id"`
+		RideID      string `json:"ride_id"`
+		Origin      string `json:"origin"`
+		Destination string `json:"destination"`
+		Timestamp   int64  `json:"timestamp"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Payload inválido", http.StatusBadRequest)
+		return
+	}
+
+	s.mu.Lock()
+	sucesso := false
+	if ride, existe := s.rides[req.RideID]; existe {
+		for i, seg := range ride.Segments {
+			if seg.Origin == req.Origin && seg.Destination == req.Destination {
+				if seg.AvailableSeats > 0 {
+					s.rides[req.RideID].Segments[i].AvailableSeats--
+					s.rides[req.RideID].Segments[i].Passengers = append(seg.Passengers, req.PassengerID)
+					s.SalvarDados()
+					sucesso = true
+				}
+				break
+			}
+		}
+	}
+	s.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	if sucesso {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"SUCCESS"}`))
+	} else {
+		// retorna 409 Conflict se a vaga já foi ocupada
+		w.WriteHeader(http.StatusConflict)
+		w.Write([]byte(`{"status":"ERROR"}`))
+	}
+}
+
+func (s *ServerState) handlerUndoSegment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método não permitido", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		PassengerID string `json:"passenger_id"`
+		RideID      string `json:"ride_id"`
+		Origin      string `json:"origin"`
+		Destination string `json:"destination"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	if ride, existe := s.rides[req.RideID]; existe {
+		for i, seg := range ride.Segments {
+			if seg.Origin == req.Origin && seg.Destination == req.Destination {
+				s.rides[req.RideID].Segments[i].AvailableSeats++
+				for j, p := range seg.Passengers {
+					if p == req.PassengerID {
+						s.rides[req.RideID].Segments[i].Passengers = append(seg.Passengers[:j], seg.Passengers[j+1:]...)
+						break
+					}
+				}
+				s.SalvarDados()
+				break
+			}
+		}
+	}
+	s.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"SUCCESS"}`))
+}
+
+func (s *ServerState) handlerGetReservations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Método não permitido", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// o id do passageiro vem na URL
+	passengerID := r.URL.Query().Get("passenger_id")
+
+	type Reserva struct {
+		RideID      string  `json:"ride_id"`
+		DriverID    string  `json:"driver_id"`
+		Date        string  `json:"date"`
+		Origin      string  `json:"origin"`
+		Destination string  `json:"destination"`
+		Price       float64 `json:"price"`
+	}
+	var reservasPeer []Reserva
+
+	s.mu.Lock()
+	for rideID, ride := range s.rides {
+		for _, seg := range ride.Segments {
+			for _, passID := range seg.Passengers {
+				if passID == passengerID {
+					reservasPeer = append(reservasPeer, Reserva{
+						RideID:      rideID,
+						DriverID:    ride.DriverID,
+						Date:        ride.Date,
+						Origin:      seg.Origin,
+						Destination: seg.Destination,
+						Price:       seg.Price,
+					})
+					break
+				}
+			}
+		}
+	}
+	s.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(reservasPeer)
+}
+
+func (s *ServerState) handlerCascadeCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método não permitido", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		PassengerID string `json:"passenger_id"`
+		Date        string `json:"date"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Payload inválido", http.StatusBadRequest)
+		return
+	}
+
+	s.mu.Lock()
+	for _, ride := range s.rides {
+		if ride.Date == req.Date {
+			for i, seg := range ride.Segments {
+				for j, passID := range seg.Passengers {
+					if passID == req.PassengerID {
+						// Remove o passageiro e devolve a vaga à carona de terceiros
+						ride.Segments[i].Passengers = append(seg.Passengers[:j], seg.Passengers[j+1:]...)
+						ride.Segments[i].AvailableSeats++
+						break
+					}
+				}
+			}
+		}
+	}
+	s.SalvarDados()
+	s.mu.Unlock()
+
+	w.WriteHeader(http.StatusOK)
 }

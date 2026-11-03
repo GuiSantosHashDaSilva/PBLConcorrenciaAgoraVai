@@ -1,31 +1,56 @@
 version: '3.8'
 
 services:
-  server:
+  # SERVIDORES
+  empresa_a:
     build: .
-    container_name: vaijunto_serverGMGS
+    container_name: vaijunto_empresa_a
+    environment:
+      - PORT=8811
+      - PEERS=192.168.1.52:8812 # colocar o ip do pc com o server 1
     ports:
       - "8811:8811"
-    # O servidor roda o CMD padrão do Dockerfile ("./vaijunto_server")
+      - "9811:9811"
+    volumes:
+      - ./dados_empresa_a:/data 
 
-  motorista:
+  empresa_b:
     build: .
-    container_name: vaijunto_motoristaGMGS
-    command: ["./vaijunto_motorista"]
-    stdin_open: true # Mantém o canal de entrada aberto pra o Scanner
-    tty: true        # Simula um terminal
+    container_name: vaijunto_empresa_b
     environment:
-      - SERVER_ADDR=server:8811 # O Docker resolve a palavra "server" para o IP do contêiner do servidor
-    depends_on:
-      - server
+      - PORT=8812
+      - PEERS=192.168.1.51:8811 # colocar o ip do pc com o server 2
+    ports:
+      - "8812:8812"
+      - "9812:9812"
+    volumes:
+      - ./dados_empresa_b:/data
 
-  passageiro:
+  # CLIENTES
+  motorista_1:
     build: .
-    container_name: vaijunto_passageiroGMGS
-    command: ["./vaijunto_passageiro"]
-    stdin_open: true
+    container_name: vaijunto_motorista_1
+    command: ["motorista"]
+    stdin_open: true         
+    tty: true                
+
+  motorista_2:
+    build: .
+    container_name: vaijunto_motorista_2
+    command: ["motorista"]
+    stdin_open: true         
+    tty: true                
+
+  passageiro_1:
+    build: .
+    container_name: vaijunto_passageiro_1
+    command: ["passageiro"]
+    stdin_open: true         
+    tty: true                
+
+  passageiro_2:
+    build: .
+    container_name: vaijunto_passageiro_2
+    command: ["passageiro"]
+    stdin_open: true         
     tty: true
-    environment:
-      - SERVER_ADDR=server:8811
-    depends_on:
-      - server

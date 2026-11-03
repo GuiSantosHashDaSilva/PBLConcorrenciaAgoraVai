@@ -153,7 +153,6 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				continue
 			}
 
-			// Trava o estado para leitura
 			state.mu.Lock()
 			var minhasCaronas []*protocolo.RideRequest
 			for _, ride := range state.rides {
@@ -161,7 +160,7 @@ func handleConnection(conn net.Conn, state *ServerState) {
 					minhasCaronas = append(minhasCaronas, ride)
 				}
 			}
-			state.mu.Unlock() // libera depois de copiar os dados
+			state.mu.Unlock()
 
 			// transforma a lista de caronas em json e envia de volta
 			respostaBytes, _ := json.Marshal(map[string]any{
@@ -576,12 +575,12 @@ func handleConnection(conn net.Conn, state *ServerState) {
 					if seg.Origin == req.Origin && seg.Destination == req.Destination {
 						for j, passID := range seg.Passengers {
 							if passID == req.PassengerID {
-								// Remove o passageiro
+								// remove o passageiro
 								ride.Segments[i].Passengers = append(seg.Passengers[:j], seg.Passengers[j+1:]...)
-								// Devolve a vaga
+								// devolve a vaga
 								ride.Segments[i].AvailableSeats++
 
-								state.SalvarDados() // <-- Muito importante salvar o estado atualizado!
+								state.SalvarDados() // salva o estado atualizado
 								sucesso = true
 								break
 							}
@@ -715,6 +714,7 @@ func (s *ServerState) RequestPeerREST(peerAddr string, endpoint string, method s
 
 // handler API REST
 
+// endpoint pra os outros servers darem get na lista de caronas
 func (s *ServerState) handlerGetRides(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Método não permitido", http.StatusMethodNotAllowed)

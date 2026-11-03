@@ -24,6 +24,8 @@ type ServerState struct {
 	nextRideID int
 	peers      []string
 	dbFile     string
+	lamportMu  sync.Mutex
+	lamport    int64
 }
 
 func main() {
@@ -388,9 +390,9 @@ func handleConnection(conn net.Conn, state *ServerState) {
 				continue
 			}
 
-			// gera uma marca de tempo pra ter precedência
-			// captura o momento exato em que o server coordenador começa a transação
-			timestampTransacao := time.Now().UnixNano()
+			// gera uma marca de tempo lamport pra ter precedência
+			// captura o momento em que o server coordenador começa a transação
+			timestampTransacao := state.LamportTick()
 
 			// ordenação global pra evitar deadlock
 			// oredena os trechos e garante que todos os servidores tentem travar os recursos sempre na mesma ordem
@@ -752,6 +754,9 @@ func (s *ServerState) handlerBookSegment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// sincroniza o relógio deste servidor com o relógio que veio pela rede
+	s.LamportUpdate(req.Timestamp)
+
 	s.mu.Lock()
 	sucesso := false
 	if ride, existe := s.rides[req.RideID]; existe {
@@ -894,4 +899,22 @@ func (s *ServerState) handlerCascadeCancel(w http.ResponseWriter, r *http.Reques
 	s.mu.Unlock()
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// incrementa o relógio local para um novo evento
+func (s *ServerState) LamportTick() int64 {
+	s.lamportMu.Lock()
+	defer s.lamportMu.Unlock()
+	s.lamport++
+	return s.lamport
+}
+
+// sincroniza o relógio local com o relógio de uma mensagem recebida
+func (s *ServerState) LamportUpdate(recebido int64) {
+	s.lamportMu.Lock()
+	defer s.lamportMu.Unlock()
+	if recebido > s.lamport {
+		s.lamport = recebido
+	}
+	s.lamport++
 }

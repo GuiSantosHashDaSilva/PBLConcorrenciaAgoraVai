@@ -16,12 +16,12 @@ type Message struct {
 }
 
 func main() {
-	enderecoServidor := os.Getenv("SERVER_ADDR")
-	if enderecoServidor == "" {
-		enderecoServidor = "localhost:8811"
+	serverAddr := os.Getenv("SERVER_ADDR")
+	if serverAddr == "" {
+		serverAddr = "localhost:8811"
 	}
 
-	conn, err := net.Dial("tcp", enderecoServidor)
+	conn, err := net.Dial("tcp", serverAddr)
 	if err != nil {
 		fmt.Println("Erro ao conectar ao servidor:", err)
 		return
@@ -54,7 +54,7 @@ func main() {
 		}
 
 		if driverID == "" && opcao == "1" {
-			// Passa o leitor da rede para a função
+			// passa o leitor da rede para a função
 			driverID = autenticar(conn, scannerTeclado, leitorRede)
 		} else if driverID != "" {
 			switch opcao {
@@ -83,7 +83,7 @@ func autenticar(conn net.Conn, scanner *bufio.Scanner, leitor *bufio.Reader) str
 	req := map[string]string{"login": login, "senha": senha}
 	enviarRequisicao(conn, "LOGIN", req)
 
-	// Usa o leitor único aqui
+	// usa o leitor único aqui
 	resposta, _ := leitor.ReadString('\n')
 	fmt.Println("Resposta do servidor:", strings.TrimSpace(resposta))
 
@@ -139,7 +139,7 @@ func consultarCaronas(conn net.Conn, leitor *bufio.Reader, driverID string) {
 
 	resposta, _ := leitor.ReadString('\n')
 
-	// Estrutura pra ler e formatar os dados que vem do servidor
+	// estrutura pra ler e formatar os dados que vem do servidor
 	var respData struct {
 		Status string `json:"status"`
 		Rides  []struct {

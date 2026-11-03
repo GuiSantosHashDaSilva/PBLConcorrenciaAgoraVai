@@ -1,17 +1,18 @@
-# Usa uma imagem oficial e leve do Go
-FROM golang:1.21-alpine
+FROM golang:1.22-alpine
 
-# Define o diretório de trabalho dentro do contêiner
-WORKDIR /app
+WORKDIR /src
 
-# Copia todos os arquivos do seu projeto para o contêiner
+COPY go.mod go.sum* ./
+RUN go mod download || true
+
 COPY . .
 
-# Compila o servidor e os clientes
-# (Assumindo que eles estão na raiz. O Go cuida das dependências locais como o pacote 'protocolo')
-RUN go build -o vaijunto_server cmd/server/server.go
-RUN go build -o vaijunto_motorista cmd/motorista/main.go
-RUN go build -o vaijunto_passageiro cmd/passageiro/main.go
 
-# Por padrão, quando a imagem rodar, iniciará o servidor
-CMD ["./vaijunto_server"]
+RUN go build -o /usr/local/bin/server ./cmd/server/server.go
+RUN go build -o /usr/local/bin/motorista ./cmd/motorista/main.go
+RUN go build -o /usr/local/bin/passageiro ./cmd/passageiro/main.go
+
+WORKDIR /data
+
+
+CMD ["server"]

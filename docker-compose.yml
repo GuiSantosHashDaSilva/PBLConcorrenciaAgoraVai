@@ -1,51 +1,77 @@
 version: '3.8'
 
 services:
-  # SERVIDORES
+
+  # SERVIDORES 
+  # pc 1: 172.16.201.14
+  # pc 2: 172.16.201.13
+  # pc 3: 172.16.201.tbd
+
   empresa_a:
     build: .
     container_name: vaijunto_empresa_a
     environment:
       - PORT=8811
-      - PEERS=172.16.103.1:8812 # colocar o ip do pc com o server 1 172.16.103.2
-
+      - PEERS=192.168.1.52:8812,192.168.1.53:8813 # IPs dos PCs 2 e 3
     ports:
       - "8811:8811"
       - "9811:9811"
     volumes:
-      - ./dados_empresa_a:/data 
+      - ./dados_empresa_a:/data
 
   empresa_b:
     build: .
     container_name: vaijunto_empresa_b
     environment:
       - PORT=8812
-      - PEERS=172.16.103.2:8811 # colocar o ip do pc com o server 2 172.16.103.1
-
+      - PEERS=192.168.1.51:8811,192.168.1.53:8813 # IPs dos PCs 1 e 3
     ports:
       - "8812:8812"
       - "9812:9812"
     volumes:
       - ./dados_empresa_b:/data
 
-  # CLIENTES
+  empresa_c:
+    build: .
+    container_name: vaijunto_empresa_c
+    environment:
+      - PORT=8813
+      - PEERS=192.168.1.51:8811,192.168.1.52:8812 # IPs dos PCs 1 e 2
+    ports:
+      - "8813:8813"
+      - "9813:9813"
+    volumes:
+      - ./dados_empresa_c:/data
+
+  
+  # CLIENTES INTERATIVOS
+  
   motorista_1:
     build: .
     container_name: vaijunto_motorista_1
     command: ["motorista"]
     environment:
       - SERVER_ADDR=empresa_a:8811
-    stdin_open: true         
-    tty: true                
+    stdin_open: true
+    tty: true
 
   motorista_2:
     build: .
     container_name: vaijunto_motorista_2
     command: ["motorista"]
     environment:
-      - SERVER_ADDR=empresa_a:8812
-    stdin_open: true         
-    tty: true                
+      - SERVER_ADDR=empresa_b:8812
+    stdin_open: true
+    tty: true
+
+  motorista_3:
+    build: .
+    container_name: vaijunto_motorista_3
+    command: ["motorista"]
+    environment:
+      - SERVER_ADDR=empresa_c:8813
+    stdin_open: true
+    tty: true
 
   passageiro_1:
     build: .
@@ -53,14 +79,9 @@ services:
     command: ["passageiro"]
     environment:
       - SERVER_ADDR=empresa_a:8811
-    stdin_open: true         
-    tty: true                
-
-  passageiro_2:
-    build: .
-    container_name: vaijunto_passageiro_2
-    environment:
-      - SERVER_ADDR=empresa_a:8812
-    command: ["passageiro"]
-    stdin_open: true         
+    stdin_open: true
     tty: true
+
+networks:
+  default:
+    name: vaijunto_network
